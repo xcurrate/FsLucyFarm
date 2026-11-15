@@ -8,9 +8,14 @@ const TICK_MS = 15000;
 const MAX_BUDGET_MINUTES = 20 * 60;
 const TIME_RE = /^([01]?\d|2[0-3])[.:]([0-5]\d)$/;
 
+// Durasi Mode 1 (jadwal istirahat) dikunci 3 jam: pemilik hanya memilih jam mulai,
+// jam selesai dihitung otomatis. Mode 2 default total 3 jam.
+const SCHEDULE_DURATION_MINUTES = 3 * 60;
+const DEFAULT_BUDGET_MINUTES = 3 * 60;
+
 const REST_DEFAULTS = {
-    schedule: { enabled: false, start: '05:00', end: '10:00' },
-    budget: { enabled: false, maxMinutes: 300, minSessionMinutes: 15, maxSessionMinutes: 60 }
+    schedule: { enabled: false, start: '05:00', end: '08:00' },
+    budget: { enabled: false, maxMinutes: DEFAULT_BUDGET_MINUTES, minSessionMinutes: 15, maxSessionMinutes: 60 }
 };
 
 const toInt = (value, fallback) => {
@@ -25,6 +30,13 @@ const normalizeTime = (value, fallback) => {
     return match ? `${match[1].padStart(2, '0')}:${match[2]}` : fallback;
 };
 
+const addMinutesToTime = (time, minutes) => {
+    const total = (timeToMinutes(time) + minutes) % (24 * 60);
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+};
+
 const normalizeRestSettings = (raw = {}) => {
     const schedule = raw?.schedule || {};
     const budget = raw?.budget || {};
@@ -32,11 +44,13 @@ const normalizeRestSettings = (raw = {}) => {
     const maxMinutes = clamp(toInt(budget.maxMinutes, d.budget.maxMinutes), 1, MAX_BUDGET_MINUTES);
     const minSessionMinutes = clamp(toInt(budget.minSessionMinutes, d.budget.minSessionMinutes), 1, maxMinutes);
     const maxSessionMinutes = clamp(toInt(budget.maxSessionMinutes, d.budget.maxSessionMinutes), minSessionMinutes, maxMinutes);
+    const start = normalizeTime(schedule.start, d.schedule.start);
     return {
         schedule: {
             enabled: schedule.enabled === true,
-            start: normalizeTime(schedule.start, d.schedule.start),
-            end: normalizeTime(schedule.end, d.schedule.end)
+            start,
+            // Durasi Mode 1 dikunci 3 jam: jam selesai selalu start + 3 jam.
+            end: addMinutesToTime(start, SCHEDULE_DURATION_MINUTES)
         },
         budget: { enabled: budget.enabled === true, maxMinutes, minSessionMinutes, maxSessionMinutes }
     };

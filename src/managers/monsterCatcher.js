@@ -92,6 +92,9 @@ const parseWaitTimeMs = (text) => {
 
 module.exports = function createMonsterCatcherManager(state, configManager, loopManager, commandSender, options = {}) {
     const decoder = options.decoder || (buffer => TooEz2.decodeBuffer(buffer));
+    const resumeDelayMs = Number.isFinite(options.resumeDelayMs)
+        ? Math.max(0, options.resumeDelayMs)
+        : CONSTANTS.CAPTCHA_RESUME_DELAY_MS;
     // `downloadImage` dideklarasikan dengan `const` di bawah; gunakan akses
     // lambat agar const di atas tidak mengevaluasi binding pada TDZ saat init.
     const getDownloader = () => options.downloader || downloadImage;
@@ -105,6 +108,7 @@ module.exports = function createMonsterCatcherManager(state, configManager, loop
         lastCode: null,
         lastTriggerAt: 0,
         retryTimer: null,
+        resumeTimer: null,
         processedMessageIds: new Set(),
         history: []
     };
@@ -126,6 +130,8 @@ module.exports = function createMonsterCatcherManager(state, configManager, loop
     const clearRetryTimer = () => {
         if (mc.retryTimer) clearTimeout(mc.retryTimer);
         mc.retryTimer = null;
+        if (mc.resumeTimer) clearTimeout(mc.resumeTimer);
+        mc.resumeTimer = null;
     };
 
     // Channel DM tujuan: prioritaskan channel pesan sensor terakhir, lalu setting eksplisit.
@@ -281,13 +287,21 @@ module.exports = function createMonsterCatcherManager(state, configManager, loop
         clearRetryTimer();
         mc.status = STATUS.RESUMING;
         recordHistory({ type: 'done', ...reason });
-        resumeLoops();
-        mc.status = STATUS.IDLE;
-        mc.phase = PHASE.IDLE;
+        // Beri jeda 10 detik setelah captcha selesai sebelum loop dilanjutkan,
+        // supaya aksi Lucy sebelumnya benar-benar tuntas. Dijadwalkan (bukan
+        // memblokir) agar pesan Discord lain tetap diproses.
+        if (mc.resumeTimer) clearTimeout(mc.resumeTimer);
+        mc.resumeTimer = setTimeout(() => {
+            mc.resumeTimer = null;
+            resumeLoops();
+            mc.status = STATUS.IDLE;
+            mc.phase = PHASE.IDLE;
+            log.success(`${prefix()}Proses catch selesai; loop kembali normal.`);
+        }, resumeDelayMs);
+        if (typeof mc.resumeTimer.unref === 'function') mc.resumeTimer.unref();
         mc.retryCount = 0;
         mc.lastCode = null;
         mc.channelId = '';
-        log.success(`${prefix()}Proses catch selesai; loop kembali normal.`);
         return true;
     };
 

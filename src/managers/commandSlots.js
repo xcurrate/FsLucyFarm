@@ -1,15 +1,17 @@
 const { randomInt, normalizeSendCount } = require('../utils');
+const { COOLDOWN_POLICY } = require('../constants');
 
 const CUSTOM_SLOT_COUNT = 3;
 // Command Tetap lb + lh = SATU UNIT (persis seperti wh/wb dulu): teks terkunci,
 // satu channel, satu delay, satu count, satu flag enabled. Tidak ada konfigurasi
 // per-slot, jadi tidak mungkin ada "lh kosong" / "lb kosong" yang berbeda.
 const FIXED_PAIR = [
-    { key: 'lb', text: 'lb', label: 'Other Command 4' },
-    { key: 'lh', text: 'lh', label: 'Other Command 5' }
+    { key: 'lb', text: 'lb', label: 'Command Tetap lb' },
+    { key: 'lh', text: 'lh', label: 'Command Tetap lh' }
 ];
 const TOTAL_SLOT_COUNT = CUSTOM_SLOT_COUNT + FIXED_PAIR.length;
-const DEFAULT_DELAY_MS = 5000;
+// Default jeda Custom Commands. Batas bawah per tier ditangani tierPolicy.
+const DEFAULT_DELAY_MS = COOLDOWN_POLICY.customDefaultMs;
 
 const toDelayMs = (value, fallback) => {
     const num = Number(value);
@@ -67,6 +69,18 @@ const normalizeFixedCommands = (fixedCommands = {}, fallbackMs = DEFAULT_DELAY_M
         channelId: String(merged.channelId || ''),
         enabled: merged.enabled === true
     };
+};
+
+// Command Tetap dikunci 17-20 detik untuk semua akun/tier (tidak bisa kustom).
+// Diterapkan saat config dimuat/dijalankan, bukan di normalizer, agar konfigurasi
+// internal (mis. pengujian loop) tetap bisa memakai jeda kecil.
+const lockFixedDelay = (config = {}) => {
+    if (config.fixedCommands) {
+        config.fixedCommands.delayMs = COOLDOWN_POLICY.fixedMinMs;
+        config.fixedCommands.delayMinMs = COOLDOWN_POLICY.fixedMinMs;
+        config.fixedCommands.delayMaxMs = COOLDOWN_POLICY.fixedMaxMs;
+    }
+    return config;
 };
 
 // Slot 0..2 = custom (bisa diedit), slot 3..4 = Command Tetap lb/lh (satu unit).
@@ -170,6 +184,7 @@ module.exports = {
     normalizeCustomCommand,
     normalizeOtherCommands,
     normalizeFixedCommands,
+    lockFixedDelay,
     getCommandSlots,
     getCommandSlot,
     getPrimaryCommandChannelId,

@@ -78,6 +78,7 @@ function createDashboardApp({ baseDir = resolveBaseDir() } = {}) {
         statsService,
         discordProfileService,
         state,
+        slotPermissionManager,
         logger
     }));
 

@@ -37,17 +37,22 @@ function createSlotPermissionRoutes({ slotPermissionManager, configManager, prof
     router.get('/owner/slots', (req, res) => {
         const message = escapeHtml(req.query.message || '');
         const grants = slotPermissionManager.list();
+        const tierLabel = (tier) => (String(tier || '').toLowerCase() === 'regular' ? '🆓 Reguler' : '⭐ Premium');
         const rows = grants.length ? grants.map((grant) =>
-            '<tr><td><code>' + escapeHtml(grant.accountId) + '</code></td><td>' + escapeHtml(grant.note || '—') +
+            '<tr><td><code>' + escapeHtml(grant.accountId) + '</code></td><td>' + escapeHtml(tierLabel(grant.tier)) +
+            '</td><td>' + escapeHtml(grant.note || '—') +
             '</td><td>' + escapeHtml(grant.status) + '</td><td>' + escapeHtml(grant.durationHours ? grant.durationHours + ' jam' : 'Tanpa batas') +
             '</td><td>' + escapeHtml(formatExpiry(grant.expiresAt)) + '</td><td>' + escapeHtml(grant.createdAt || '—') + '</td><td>' +
             (grant.status !== 'revoked'
-                ? '<form method="POST" action="/owner/slots"><input type="hidden" name="action" value="revoke">' +
+                ? '<form method="POST" action="/owner/slots" class="slot-actions">' +
                   '<input type="hidden" name="accountId" value="' + escapeHtml(grant.accountId) + '">' +
+                  '<select name="tier"><option value="premium"' + (String(grant.tier || '').toLowerCase() === 'regular' ? '' : ' selected') + '>Premium</option>' +
+                  '<option value="regular"' + (String(grant.tier || '').toLowerCase() === 'regular' ? ' selected' : '') + '>Reguler</option></select>' +
                   '<input type="password" name="confirmPassword" minlength="12" required autocomplete="current-password" placeholder="Password pemilik">' +
-                  '<button type="submit">Cabut izin</button></form>'
+                  '<button type="submit" name="action" value="setTier">Ubah tier</button>' +
+                  '<button type="submit" name="action" value="revoke">Cabut izin</button></form>'
                 : '—') + '</td></tr>'
-        ).join('') : '<tr><td colspan="7">Belum ada izin.</td></tr>';
+        ).join('') : '<tr><td colspan="8">Belum ada izin.</td></tr>';
         const notice = slotPermissionManager.isConfigured()
             ? '<p class="good">Password pemilik aktif. Satu izin berlaku untuk satu Discord User ID dan hanya dapat dipakai sekali.</p>'
             : '<p class="warning">Fitur belum aktif. Atur SLOT_OWNER_PASSWORD di panel hosting, atau buat file <code>slot-owner-password.txt</code> di folder utama bot berisi password acak minimal 12 karakter, lalu restart bot.</p>';
@@ -65,12 +70,15 @@ function createSlotPermissionRoutes({ slotPermissionManager, configManager, prof
             '<form method="POST" action="/owner/slots"><input type="hidden" name="action" value="grant">' +
             '<label>Discord User ID <input name="accountId" inputmode="numeric" pattern="\\d{17,20}" minlength="17" maxlength="20" required placeholder="123456789012345678"></label>' +
             '<label>Catatan (opsional) <input name="note" maxlength="120" placeholder="Nama penerima / referensi donasi"></label>' +
+            '<label>Tier akun <select name="tier"><option value="premium" selected>⭐ Premium — bisa atur cooldown & fitur lengkap</option>' +
+            '<option value="regular">🆓 Reguler — cooldown default, fitur terbatas</option></select></label>' +
+            '<div class="input-hint">Premium: jeda Custom Commands boleh dari 5 detik, Command Tetap 17–20 detik, dan semua fitur aktif. Reguler: jeda Custom Commands minimal 16 detik, Command Tetap dikunci 17–20 detik, dan Auto Adventure / Daily / Send Cookie dinonaktifkan.</div>' +
             '<label>Durasi izin (jam) <input type="number" name="durationHours" min="0" step="1" placeholder="Contoh: 24 — kosongkan untuk tanpa batas"></label>' +
             '<div class="input-hint">Isi 24 untuk izin 24 jam. Setelah akun ditambahkan, hitungan dimulai dan akun akan dihapus otomatis saat durasi habis. Kosong/0 = tanpa batas waktu.</div>' +
             '<label>Password khusus pemilik <input type="password" name="confirmPassword" minlength="12" required autocomplete="current-password"></label>' +
             '<button type="submit">Berikan izin satu slot</button></form></section><section><h2>Daftar izin</h2>' +
             '<p><code>available</code> = belum dipakai; <code>used</code> = sudah digunakan; <code>revoked</code> = dicabut/kedaluwarsa.</p>' +
-            '<table><thead><tr><th>Discord User ID</th><th>Catatan</th><th>Status</th><th>Durasi</th><th>Berakhir</th><th>Diberikan</th><th>Aksi</th></tr></thead><tbody>' +
+            '<table><thead><tr><th>Discord User ID</th><th>Tier</th><th>Catatan</th><th>Status</th><th>Durasi</th><th>Berakhir</th><th>Diberikan</th><th>Aksi</th></tr></thead><tbody>' +
             rows + '</tbody></table></section></main></body></html>');
     });
 
@@ -90,11 +98,20 @@ function createSlotPermissionRoutes({ slotPermissionManager, configManager, prof
             if (accountId === mainId || profileManager.getSavedProfiles().includes(accountId)) {
                 return res.redirect('/owner/slots?message=' + encodeURIComponent('Akun ini sudah ada. Izin hanya diberikan untuk akun baru.'));
             }
-            const result = slotPermissionManager.grant(accountId, req.body?.note || '', req.body?.durationHours);
+            const result = slotPermissionManager.grant(accountId, req.body?.note || '', req.body?.durationHours, req.body?.tier);
+            const tierText = String(result.tier || '').toLowerCase() === 'regular' ? 'reguler' : 'premium';
             return res.redirect('/owner/slots?message=' + encodeURIComponent(
                 result.ok
-                    ? (result.durationHours ? `Izin satu slot berhasil diberikan (${result.durationHours} jam).` : 'Izin satu slot berhasil diberikan (tanpa batas waktu).')
+                    ? `Izin satu slot berhasil diberikan (tier ${tierText}${result.durationHours ? `, ${result.durationHours} jam` : ', tanpa batas waktu'}).`
                     : result.message
+            ));
+        }
+
+        if (action === 'setTier') {
+            const result = slotPermissionManager.setTier(accountId, req.body?.tier);
+            const tierText = String(result.tier || '').toLowerCase() === 'regular' ? 'reguler' : 'premium';
+            return res.redirect('/owner/slots?message=' + encodeURIComponent(
+                result.ok ? `Tier akun diubah menjadi ${tierText}.` : result.message
             ));
         }
 

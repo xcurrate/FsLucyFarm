@@ -175,8 +175,9 @@ test('POST /save persists fixed lb/lh pair (single config synced to both slots) 
         assert.equal(response.status, 200);
         const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
         assert.equal(savedConfig.fixedCommands.channelId, '222');
-        assert.equal(savedConfig.fixedCommands.delayMinMs, 4000);
-        assert.equal(savedConfig.fixedCommands.delayMaxMs, 6000);
+        // Command Tetap dikunci 17-20 detik untuk semua akun/tier.
+        assert.equal(savedConfig.fixedCommands.delayMinMs, 17000);
+        assert.equal(savedConfig.fixedCommands.delayMaxMs, 20000);
         assert.equal(savedConfig.fixedCommands.count, 0);
         assert.equal(savedConfig.otherCommands[0].text, '!custom');
         assert.equal(savedConfig.otherCommands[0].channelId, '111');
@@ -475,7 +476,7 @@ test('POST /save stores empty Lucy send count as infinite and persists Istirahat
         assert.equal(savedConfig.otherCommands[0].count, 0);
         assert.equal(savedConfig.otherCommands[1].count, 7);
         assert.deepEqual(savedConfig.settings.rest, {
-            schedule: { enabled: true, start: '05:00', end: '10:00' },
+            schedule: { enabled: true, start: '05:00', end: '08:00' },
             budget: { enabled: true, maxMinutes: 300, minSessionMinutes: 20, maxSessionMinutes: 45 }
         });
 
@@ -858,4 +859,102 @@ test('deleting an account requires the correct owner password', async () => {
         if (previousPassword === undefined) delete process.env.SLOT_OWNER_PASSWORD;
         else process.env.SLOT_OWNER_PASSWORD = previousPassword;
     }
+});
+
+// Penegakan tier pada /save: Reguler mengunci Custom Commands minimal 16 dtk dan
+// mematikan fitur premium; Premium boleh dari 5 dtk. Command Tetap selalu 17-20 dtk.
+test('POST /save enforces slot tier cooldowns and premium-only features', async () => {
+    const regularId = '100000000000000021';
+    const premiumId = '100000000000000022';
+    const mainId = '100000000000000001';
+    const seedStore = (baseDir, entries) => {
+        const grants = {};
+        for (const [accountId, tier] of Object.entries(entries)) {
+            grants[accountId] = { accountId, status: 'used', tier, note: '', durationHours: 0, createdAt: new Date().toISOString(), expiresAt: null };
+        }
+        fs.writeFileSync(path.join(baseDir, 'slot-permissions.json'), JSON.stringify({ grants }));
+    };
+
+    await withSeededDashboard({
+        mainConfig: {
+            token: makeToken(mainId),
+            botStatus: { running: false, paused: true },
+            multiAccount: { enabled: true, maxAccounts: 3 },
+            settings: {},
+            otherCommands: [{ text: '!main', delayMs: 5000, count: 1, channelId: '111', enabled: false }]
+        },
+        profiles: {
+            [regularId]: { token: makeToken(regularId), botStatus: { running: false, paused: true }, settings: {}, otherCommands: [{ text: '!r', delayMs: 3000, count: 1, channelId: '1', enabled: false }] },
+            [premiumId]: { token: makeToken(premiumId), botStatus: { running: false, paused: true }, settings: {}, otherCommands: [{ text: '!p', delayMs: 3000, count: 1, channelId: '1', enabled: false }] }
+        }
+    }, async (url, baseDir) => {
+        seedStore(baseDir, { [regularId]: 'regular', [premiumId]: 'premium' });
+
+        const headers = {
+            Authorization: authHeader(),
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            Accept: 'application/json'
+        };
+        const saveFor = (id, extra = {}) => fetch(`${url}/save`, {
+            method: 'POST',
+            headers,
+            body: new URLSearchParams({ action: 'adventureStart', viewingProfileId: id, other1Text: '!x', other1Channel: '1', other1DelayMin: '3', other1DelayMax: '4', ...extra })
+        });
+
+        // Reguler: delay diangkat ke 16 dtk dan fitur premium dipaksa mati.
+        const regular = await saveFor(regularId, { dailyEnabled: 'on', cookieEnabled: 'on' });
+        assert.equal(regular.status, 200);
+        const savedRegular = JSON.parse(fs.readFileSync(path.join(baseDir, 'profiles', `config_${regularId}.json`), 'utf8'));
+        assert.equal(savedRegular.otherCommands[0].delayMinMs, 16000);
+        assert.equal(savedRegular.otherCommands[0].delayMaxMs, 16000);
+        assert.equal(savedRegular.settings.adventure.enabled, false, 'Auto Adventure dipaksa mati untuk reguler');
+        assert.equal(savedRegular.settings.daily.enabled, false, 'Lucy Daily dipaksa mati untuk reguler');
+        assert.equal(savedRegular.settings.cookie.enabled, false, 'Send Cookie dipaksa mati untuk reguler');
+        // Command Tetap tetap dikunci 17-20 dtk.
+        assert.equal(savedRegular.fixedCommands.delayMinMs, 17000);
+        assert.equal(savedRegular.fixedCommands.delayMaxMs, 20000);
+
+        // Premium: delay boleh dari 5 dtk dan fitur premium boleh aktif.
+        const premium = await saveFor(premiumId, { dailyEnabled: 'on', cookieEnabled: 'on' });
+        assert.equal(premium.status, 200);
+        const savedPremium = JSON.parse(fs.readFileSync(path.join(baseDir, 'profiles', `config_${premiumId}.json`), 'utf8'));
+        assert.equal(savedPremium.otherCommands[0].delayMinMs, 5000);
+        assert.equal(savedPremium.settings.adventure.enabled, true);
+        assert.equal(savedPremium.settings.daily.enabled, true);
+        assert.equal(savedPremium.settings.cookie.enabled, true);
+    });
+});
+
+// Item 6: kategori Daily (Lucy Daily & Send Cookie) dan Auto Adventure adalah
+// premium-only. Halaman profil akun Reguler harus menonaktifkan kontrolnya.
+test('profile page disables premium-only features for a Reguler account', async () => {
+    const regularId = '100000000000000031';
+    const premiumId = '100000000000000032';
+    const mainId = '100000000000000001';
+
+    await withSeededDashboard({
+        mainConfig: { token: makeToken(mainId), botStatus: { running: false, paused: true }, multiAccount: { enabled: true, maxAccounts: 3 }, settings: {}, otherCommands: [] },
+        profiles: {
+            [regularId]: { token: makeToken(regularId), botStatus: { running: false, paused: true }, settings: {}, otherCommands: [] },
+            [premiumId]: { token: makeToken(premiumId), botStatus: { running: false, paused: true }, settings: {}, otherCommands: [] }
+        }
+    }, async (url, baseDir) => {
+        fs.writeFileSync(path.join(baseDir, 'slot-permissions.json'), JSON.stringify({
+            grants: {
+                [regularId]: { accountId: regularId, status: 'used', tier: 'regular', note: '', durationHours: 0, createdAt: new Date().toISOString(), expiresAt: null },
+                [premiumId]: { accountId: premiumId, status: 'used', tier: 'premium', note: '', durationHours: 0, createdAt: new Date().toISOString(), expiresAt: null }
+            }
+        }));
+        const auth = { Authorization: authHeader() };
+
+        const regularHtml = await (await fetch(`${url}/?profileId=${regularId}`, { headers: auth })).text();
+        assert.match(regularHtml, /Fitur ini hanya untuk tier Premium/, 'Reguler melihat keterangan fitur terkunci');
+        assert.match(regularHtml, /name="dailyEnabled"[^>]*disabled/, 'checkbox Lucy Daily dinonaktifkan');
+        assert.match(regularHtml, /name="cookieEnabled"[^>]*disabled/, 'checkbox Send Cookie dinonaktifkan');
+        assert.match(regularHtml, /value="adventureStart"[^>]*disabled/, 'tombol Auto Adventure ON dinonaktifkan');
+
+        const premiumHtml = await (await fetch(`${url}/?profileId=${premiumId}`, { headers: auth })).text();
+        assert.doesNotMatch(premiumHtml, /Fitur ini hanya untuk tier Premium/, 'Premium tidak melihat keterangan terkunci');
+        assert.doesNotMatch(premiumHtml, /name="dailyEnabled"[^>]*disabled/, 'Premium dapat mengaktifkan Lucy Daily');
+    });
 });

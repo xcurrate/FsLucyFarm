@@ -128,3 +128,25 @@ test('command sender blocks commands during Monster Catcher but allows monster D
     assert.equal(ok, true, 'monster DM send is allowed while catch paused');
     assert.deepEqual(reachedClient, ['ABC123']);
 });
+
+const createRestManager = require('../src/managers/rest');
+
+test('Rest Mode 1: durasi dikunci 3 jam (end = start + 3 jam)', () => {
+    const settings = createRestManager.normalizeRestSettings({
+        schedule: { enabled: true, start: '05:00', end: '10:00' }
+    });
+    assert.equal(settings.schedule.start, '05:00');
+    assert.equal(settings.schedule.end, '08:00', 'jam selesai selalu start + 3 jam');
+});
+
+test('Rest Mode 1: melewati tengah malam dihitung dengan modulo 24 jam', () => {
+    const settings = createRestManager.normalizeRestSettings({
+        schedule: { enabled: true, start: '23:00' }
+    });
+    assert.equal(settings.schedule.end, '02:00');
+});
+
+test('Rest Mode 2: default total istirahat 3 jam (180 menit)', () => {
+    const settings = createRestManager.normalizeRestSettings({});
+    assert.equal(settings.budget.maxMinutes, 180);
+});

@@ -8,7 +8,7 @@ const TooEz2 = require('../src/managers/TooEz2');
 const { normalizeMonsterCatcherSettings, messageText, extractImageUrl, parseWaitTimeMs, CONSTANTS } = createMonsterCatcherManager;
 const LUCY_ID = CONSTANTS?.SENSOR_TRIGGER_TEXT ? '1438615298012872817' : require('../src/constants').LUCY_BOT_ID;
 
-function setup({ config = {}, decoder = () => 'ABC123', downloader = async () => Buffer.from('fake-png') } = {}) {
+function setup({ config = {}, decoder = () => 'ABC123', downloader = async () => Buffer.from('fake-png'), resumeDelayMs = 0 } = {}) {
     const state = {
         client: { isReady: () => true, user: { id: 'me' } },
         config: {
@@ -40,7 +40,7 @@ function setup({ config = {}, decoder = () => 'ABC123', downloader = async () =>
         { getMonsterCatcherSettings: () => normalizeMonsterCatcherSettings(state.config.settings.monsterCatcher) },
         loopManager,
         commandSender,
-        { decoder, downloader }
+        { decoder, downloader, resumeDelayMs }
     );
     return { state, manager, sent, loopEpoch };
 }
@@ -114,16 +114,35 @@ test('sensor trigger pauses loops, decodes image, sends code to DM Lucy', async 
 });
 
 test('done confirmation resumes loops and ends the catch', async () => {
-    const { manager, loopEpoch, sent } = setup({ decoder: () => 'ABC123' });
+    const { manager, loopEpoch, sent } = setup({ decoder: () => 'ABC123', resumeDelayMs: 0 });
     await manager.handle(withImage());
 
     const done = sensorMessage({ content: '✅ Terima kasih, catch selesai', id: 'done-1' });
     const handled = await manager.handle(done);
     assert.equal(handled, true);
+    // Resume dijadwalkan (jeda aman), jadi beri kesempatan timer 0 ms berjalan.
+    await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(loopEpoch.resumed, true, 'loops must resume after catch selesai');
     assert.equal(manager.getStatus().status, 'IDLE');
     assert.equal(manager.getStatus().active, false);
     assert.equal(sent.filter(s => s.cmd === 'ABC123').length, 1, 'sensor must not reprocess');
+});
+
+test('captcha resume memakai jeda aman 10 detik sebelum loop lanjut', async () => {
+    // Jeda default berasal dari konstanta CAPTCHA_RESUME_DELAY_MS (10 detik).
+    assert.equal(require('../src/constants').CAPTCHA_RESUME_DELAY_MS, 10000);
+
+    const { manager, loopEpoch } = setup({ decoder: () => 'ABC123', resumeDelayMs: 10000 });
+    await manager.handle(withImage());
+    await manager.handle(sensorMessage({ content: '✅ Terima kasih, catch selesai', id: 'done-wait' }));
+
+    // Belum 10 detik: loop belum dilanjutkan.
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(loopEpoch.resumed, false, 'loop belum lanjut sebelum jeda 10 detik');
+    assert.equal(manager.getStatus().status, 'RESUMING');
+
+    // Bersihkan timer agar proses test tidak menunggu 10 detik.
+    manager.stop();
 });
 
 test('mismatch triggers "ulang", waits for refresh, and re-requests a new sensor', async () => {
@@ -223,7 +242,7 @@ test('new sensor while catching is processed without re-pausing', async () => {
 });
 
 test('full retry cycle: mismatch -> ulang -> refresh -> new sensor -> done', async () => {
-    const { state, manager, sent, loopEpoch } = setup({ decoder: () => 'ABC123' });
+    const { state, manager, sent, loopEpoch } = setup({ decoder: () => 'ABC123', resumeDelayMs: 0 });
 
     // Sensor pertama -> decode -> kirim kode
     await manager.handle(withImage({ id: 'sensor-1' }));
@@ -246,8 +265,9 @@ test('full retry cycle: mismatch -> ulang -> refresh -> new sensor -> done', asy
     await manager.handle(withImage({ id: 'sensor-2' }));
     assert.equal(sent.filter(s => s.cmd === 'ABC123').length, 2);
 
-    // Konfirmasi selesai -> resume loop
+    // Konfirmasi selesai -> resume loop setelah jeda aman (timer, bukan langsung)
     await manager.handle(sensorMessage({ content: '✅ Terima kasih, catch selesai', id: 'done-2' }));
+    await new Promise(resolve => setTimeout(resolve, 10));
     assert.equal(loopEpoch.resumed, true);
     assert.equal(manager.getStatus().status, 'IDLE');
     assert.equal(manager.getStatus().active, false);

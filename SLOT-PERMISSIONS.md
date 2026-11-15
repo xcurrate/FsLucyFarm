@@ -21,10 +21,36 @@ Open the dashboard and choose **IZIN SLOT AKUN**, or visit `/owner/slots`.
 1. Ask the recipient for the Discord User ID of the account they will add.
 2. On the owner page, enter that ID and optionally add a note for the donation.
 3. Optionally set **Durasi izin (jam)** — for example `24` for a 24-hour grant. Leave it empty (or `0`) for a grant that never expires.
-4. Confirm using the owner password.
-5. The recipient can then add that account once through the existing new-account form.
+4. Choose the **Tier** for the slot: **Premium** (default) or **Reguler**. The tier only changes features and delays; it never changes the grant duration.
+5. Confirm using the owner password.
+6. The recipient can then add that account once through the existing new-account form.
 
 An unused grant is stored in `slot-permissions.json`. After successful account creation it is marked `used`, and cannot be used to add a different account. A token refresh for an account already saved does not consume another grant.
+
+You can change an account's tier later with the **Tier** action on the owner page. The new tier applies the next time the account's settings are saved or the account is started.
+
+## Tiers: Premium vs Reguler
+
+There is no quota. The owner decides how many slots to grant. The tier is set when a slot is granted and only differentiates features and delays.
+
+| Setting | Premium | Reguler |
+| --- | --- | --- |
+| Custom Commands delay (lower bound) | from 5 seconds | minimum 16 seconds |
+| Command Tetap (lb + lh) delay | locked 17–20 seconds | locked 17–20 seconds |
+| Premium-only features (Auto Adventure, Lucy Daily, Send Cookie) | allowed | disabled |
+
+The main account is always Premium. Accounts without a grant record, or with legacy data, are treated as Premium so existing behaviour does not change.
+
+Command Tetap (lb + lh) is a single locked unit: the delay is always 17–20 seconds and cannot be customized by any tier. Only the target channel and the send count are editable.
+
+## Fixed delays for all accounts
+
+These delays are the same for every account and tier:
+
+- **Monster Catcher**: waits 10 seconds after the captcha is confirmed before the loops continue.
+- **Huntbot2**: waits 10 seconds after the "siap berburu" trigger before starting the lhb cycle.
+- **Rest, Mode 1 (schedule)**: the rest duration is locked to 3 hours; pick the start time and the end time is computed automatically (end = start + 3 hours).
+- **Rest, Mode 2 (budget)**: the default total rest budget is 3 hours (180 minutes).
 
 ## Duration and automatic removal
 

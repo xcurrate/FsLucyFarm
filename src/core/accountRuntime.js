@@ -11,7 +11,7 @@ const { normalizeGemsSettings } = createGemsManager;
 const createRestManager = require('../managers/rest');
 const { normalizeRestSettings } = createRestManager;
 const createCommandSender = require('../managers/command');
-const { normalizeOtherCommands, normalizeFixedCommands } = require('../managers/commandSlots');
+const { normalizeOtherCommands, normalizeFixedCommands, lockFixedDelay } = require('../managers/commandSlots');
 const createLoopManager = require('../managers/loop');
 const createEmergencyHandler = require('../managers/emergency');
 const createMessageHandler = require('../managers/message');
@@ -92,6 +92,8 @@ const ensureRuntimeShape = (config = {}) => {
     config.settings.telegram = config.settings.telegram || { token: '', chatId: '' };
     config.otherCommands = normalizeOtherCommands(config.otherCommands);
     config.fixedCommands = normalizeFixedCommands(config.fixedCommands);
+    // Command Tetap selalu dikunci 17-20 detik saat runtime dijalankan.
+    lockFixedDelay(config);
     config.botStatus = config.botStatus || { running: false, paused: true };
     config.safety = config.safety || { cctv: false };
     return dropOwOConfig(config);

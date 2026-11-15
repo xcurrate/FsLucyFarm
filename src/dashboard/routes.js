@@ -1,7 +1,8 @@
 const express = require('express');
 const fs = require('fs');
 const { describeRestStatus } = require('../managers/rest');
-function createDashboardRoutes({ configManager, fileService, profileManager, profilePin, uiComponents, logService, statsService, discordProfileService, state, logger }) {
+const { applyTierPolicy } = require('./services/tierPolicy');
+function createDashboardRoutes({ configManager, fileService, profileManager, profilePin, uiComponents, logService, statsService, discordProfileService, state, slotPermissionManager, logger }) {
     const router = express.Router();
 
     const isJsonRequest = (req) => req.get('X-Requested-With') === 'XMLHttpRequest'
@@ -68,6 +69,20 @@ function createDashboardRoutes({ configManager, fileService, profileManager, pro
         }
         return saved;
     };
+
+    // Tier efektif akun yang sedang disimpan. Akun utama selalu premium; akun
+    // lain mengikuti tier izin slotnya (tanpa izin / data lama = premium).
+    const resolveAccountTier = (accountId) => {
+        if (!slotPermissionManager || typeof slotPermissionManager.getTier !== 'function') return 'premium';
+        const id = String(accountId || '');
+        if (!id || id === 'default') return 'premium';
+        const mainId = profileManager.getUserId(configManager.ensureShape(configManager.get()).token);
+        if (id === mainId) return 'premium';
+        return slotPermissionManager.getTier(id);
+    };
+
+    // Menegakkan kebijakan tier tepat sebelum config disimpan.
+    const enforceTierPolicy = (config, accountId) => applyTierPolicy(config, resolveAccountTier(accountId));
 
     const setAccountStatus = (accountId, shouldRun) => {
         const target = getProfileConfigByAccountId(accountId);
@@ -260,6 +275,7 @@ function createDashboardRoutes({ configManager, fileService, profileManager, pro
                     config.globalBotStatus = configManager.ensureShape(configManager.get()).botStatus;
                 }
             }
+            config.accountTier = resolveAccountTier(config.viewingProfileId || profileManager.getUserId(config.token));
             const html = uiComponents.renderPage(config);
             console.log('[DASHBOARD] Dashboard HTML generated, size:', html.length, 'bytes');
             res.send(html);
@@ -534,6 +550,8 @@ function createDashboardRoutes({ configManager, fileService, profileManager, pro
                     newConfig.multiAccount = newConfig.multiAccount || {};
                     newConfig.multiAccount.enabled = true;
                     delete newConfig.viewingProfileId;
+                    // Akun baru mengikuti kebijakan tiernya (cooldown & fitur premium).
+                    enforceTierPolicy(newConfig, targetId);
                     
                     if (!fileService.writeJson(profilePath, newConfig)) {
                         return respondError(500, 'Failed to save new account configuration');
@@ -614,6 +632,7 @@ function createDashboardRoutes({ configManager, fileService, profileManager, pro
                 }
 
                 target.config = configManager.applySave(target.config, body);
+                enforceTierPolicy(target.config, viewingProfileId);
                 const saved = saveAccountConfig(target, target.config);
                 if (!saved) {
                     return res.status(500).json({ success: false, message: 'Failed to save account configuration' });
@@ -636,6 +655,7 @@ function createDashboardRoutes({ configManager, fileService, profileManager, pro
                 const target = targetId ? getProfileConfigByAccountId(targetId) : null;
                 let config = target ? target.config : configManager.ensureShape(configManager.get());
                 config = configManager.applySave(config, body);
+                enforceTierPolicy(config, targetId);
                 const saved = target ? saveAccountConfig(target, config) : configManager.save(config);
                 if (saved && !target) {
                     const activeId = profileManager.getUserId(config.token);
@@ -655,16 +675,19 @@ function createDashboardRoutes({ configManager, fileService, profileManager, pro
                 config = configManager.ensureShape(fs.existsSync(profilePath) ? fileService.readJson(profilePath) : configManager.get());
                 config = configManager.applySave(config, body);
                 config = configManager.applyAction(config, body.action);
+                enforceTierPolicy(config, viewingProfileId);
                 saveTarget = profilePath;
             } else {
                 config = configManager.ensureShape(configManager.get());
                 if (!isGlobalAction) {
                     config = configManager.applySave(config, body);
                     config = configManager.applyAction(config, body.action);
+                    enforceTierPolicy(config, profileManager.getUserId(config.token));
                 } else {
                     // Save any configuration changes submitted together with START/PAUSE
                     // before changing the runtime status of all accounts.
                     config = configManager.applySave(config, body);
+                    enforceTierPolicy(config, profileManager.getUserId(config.token));
                     const saved = configManager.save(config);
                     if (!saved) {
                         return res.status(500).json({ success: false, message: 'Failed to save configuration' });

@@ -71,13 +71,15 @@ Salin `config.json` sebagai basis konfigurasi. Contoh struktur utama:
   "safety": { "cctv": false },
   "multiAccount": { "enabled": true, "maxAccounts": 3 },
   "otherCommands": [
-    { "text": "", "delayMs": 5000, "count": 1, "channelId": "", "enabled": false },
-    { "text": "", "delayMs": 5000, "count": 1, "channelId": "", "enabled": false },
-    { "text": "", "delayMs": 5000, "count": 1, "channelId": "", "enabled": false }
+    { "text": "", "delayMs": 15000, "count": 1, "channelId": "", "enabled": false },
+    { "text": "", "delayMs": 15000, "count": 1, "channelId": "", "enabled": false },
+    { "text": "", "delayMs": 15000, "count": 1, "channelId": "", "enabled": false }
   ],
-  "fixedCommands": { "channelId": "", "delayMs": 5000, "count": 0, "enabled": false }
+  "fixedCommands": { "channelId": "", "delayMs": 17000, "count": 0, "enabled": false }
 }
 ```
+
+Custom Commands memakai default delay 15 detik; batas bawah per tier diatur oleh `tierPolicy` (Premium dari 5 detik, Reguler minimal 16 detik). Command Tetap (lb + lh) adalah satu unit dengan delay terkunci 17–20 detik. Lihat [SLOT-PERMISSIONS.md](SLOT-PERMISSIONS.md) untuk tier dan jeda tetap (Monster Catcher, Huntbot2, Istirahat).
 
 Semua pengaturan diatur melalui dashboard pada tab masing-masing. Properti konfigurasi legacy dari bot OwO (mis. `macrodroidId`, `autosolver`, `twoCaptchaKey`, `settings.control`, `settings.channelRotation`, `delays`, `captcha`, `tiketandhb`, `huntbot`, `boss`) akan **dibersihkan otomatis** saat project dimuat dan tidak lagi dipakai.
 

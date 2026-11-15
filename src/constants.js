@@ -59,5 +59,22 @@ minTicketLeft: 1,
     MIN_TYPING_DELAY: 290,
     MAX_TYPING_DELAY: 300,
     RESET_CHECK_INTERVAL_MS: 60000,
-    INVISIBLE_CHARS_REGEX: /[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g
+    INVISIBLE_CHARS_REGEX: /[\u0000-\u001F\u007F\u200B-\u200D\uFEFF]/g,
+
+    // --- Izin slot bertingkat (reguler vs premium) ---
+    SLOT_TIER: { PREMIUM: 'premium', REGULAR: 'regular' },
+    // Kebijakan cooldown (jeda) per tier, dalam milidetik.
+    // - Custom Commands: premium boleh dari 5 dtk; reguler minimal 16 dtk.
+    // - Command Tetap (lb+lh): dikunci 17-20 dtk untuk semua akun.
+    COOLDOWN_POLICY: {
+        customDefaultMs: 15000,
+        customPremiumMinMs: 5000,
+        customRegularMinMs: 16000,
+        fixedMinMs: 17000,
+        fixedMaxMs: 20000
+    },
+    // Fitur yang hanya boleh dinyalakan akun premium.
+    PREMIUM_ONLY_FEATURES: ['adventure', 'daily', 'cookie'],
+    // Jeda setelah captcha terverifikasi sebelum loop lanjut (Monster Catcher & Huntbot2).
+    CAPTCHA_RESUME_DELAY_MS: 10000
 };

@@ -17,8 +17,10 @@ test('slot grants are one-time, persistent, and protected by the owner password'
         assert.equal(manager.verifyOwnerPassword(OWNER_PASSWORD), true);
         assert.equal(manager.verifyOwnerPassword('wrong-password'), false);
 
-        assert.deepEqual(manager.grant(ACCOUNT_ID, 'donation'), { ok: true, durationHours: 0 });
+        assert.deepEqual(manager.grant(ACCOUNT_ID, 'donation'), { ok: true, durationHours: 0, tier: 'premium' });
         assert.equal(manager.get(ACCOUNT_ID).status, 'available');
+        assert.equal(manager.get(ACCOUNT_ID).tier, 'premium');
+        assert.equal(manager.getTier(ACCOUNT_ID), 'premium');
         assert.equal(manager.grant(ACCOUNT_ID).ok, false);
         assert.deepEqual(manager.consume(ACCOUNT_ID), { ok: true, expiresAt: null });
         assert.equal(manager.consume(ACCOUNT_ID).ok, false);
@@ -39,7 +41,7 @@ test('durasi izin dihitung sejak akun dipakai dan melahirkan expiresAt', () => {
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'slot-duration-'));
     try {
         const manager = createSlotPermissionManager({ baseDir, password: OWNER_PASSWORD });
-        assert.deepEqual(manager.grant(ACCOUNT_ID, '24 jam', 24), { ok: true, durationHours: 24 });
+        assert.deepEqual(manager.grant(ACCOUNT_ID, '24 jam', 24), { ok: true, durationHours: 24, tier: 'premium' });
         assert.equal(manager.get(ACCOUNT_ID).expiresAt, null, 'belum ada hitungan sebelum dipakai');
 
         const before = Date.now();
@@ -61,9 +63,9 @@ test('durasi tidak valid diperlakukan sebagai tanpa batas', () => {
     const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'slot-duration-invalid-'));
     try {
         const manager = createSlotPermissionManager({ baseDir, password: OWNER_PASSWORD });
-        assert.deepEqual(manager.grant('111111111111111111', '', 'abc'), { ok: true, durationHours: 0 });
-        assert.deepEqual(manager.grant('222222222222222222', '', -5), { ok: true, durationHours: 0 });
-        assert.deepEqual(manager.grant('333333333333333333', '', '12'), { ok: true, durationHours: 12 });
+        assert.deepEqual(manager.grant('111111111111111111', '', 'abc'), { ok: true, durationHours: 0, tier: 'premium' });
+        assert.deepEqual(manager.grant('222222222222222222', '', -5), { ok: true, durationHours: 0, tier: 'premium' });
+        assert.deepEqual(manager.grant('333333333333333333', '', '12'), { ok: true, durationHours: 12, tier: 'premium' });
         assert.equal(manager.get('333333333333333333').durationHours, 12);
         assert.equal(manager.consume('111111111111111111').expiresAt, null);
     } finally {
@@ -151,6 +153,34 @@ test('destroy() tidak membuat ulang file profil setelah config ditandai terhapus
         runtime2.markConfigDeleted();
         runtime2.destroy();
         assert.equal(fs.existsSync(filePath), false, 'file profil tetap terhapus setelah markConfigDeleted + destroy');
+    } finally {
+        fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+});
+
+test('tier izin dapat dipilih saat grant dan diubah lewat setTier', () => {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'slot-tier-'));
+    try {
+        const manager = createSlotPermissionManager({ baseDir, password: OWNER_PASSWORD });
+
+        assert.deepEqual(manager.grant(ACCOUNT_ID, 'reguler', 24, 'regular'), { ok: true, durationHours: 24, tier: 'regular' });
+        assert.equal(manager.getTier(ACCOUNT_ID), 'regular');
+        assert.equal(manager.get(ACCOUNT_ID).tier, 'regular');
+
+        // Tier tak dikenal / kosong = premium.
+        assert.equal(manager.grant('444444444444444444', '', 0, 'nonsense').tier, 'premium');
+        assert.equal(manager.getTier('444444444444444444'), 'premium');
+
+        // setTier mengubah tier tanpa mencabut izin.
+        assert.deepEqual(manager.setTier(ACCOUNT_ID, 'premium'), { ok: true, tier: 'premium' });
+        assert.equal(manager.getTier(ACCOUNT_ID), 'premium');
+        assert.equal(manager.get(ACCOUNT_ID).status, 'available', 'izin tetap available setelah ubah tier');
+
+        // setTier untuk akun tanpa izin ditolak.
+        assert.equal(manager.setTier('999999999999999999', 'regular').ok, false);
+
+        // Akun tanpa izin dianggap premium (data lama tetap aman).
+        assert.equal(manager.getTier('888888888888888888'), 'premium');
     } finally {
         fs.rmSync(baseDir, { recursive: true, force: true });
     }

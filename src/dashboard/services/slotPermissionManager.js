@@ -12,6 +12,13 @@ function safeEqual(actual, expected) {
 // Batas atas agar Date tidak overflow; 100 tahun sudah jauh lebih dari cukup.
 const MAX_DURATION_HOURS = 24 * 365 * 100;
 
+// Tier yang dikenal. Akun tanpa tier (data lama / tanpa izin) dianggap premium
+// agar perilakunya tidak berubah setelah fitur ini ditambahkan.
+const TIER_REGULAR = 'regular';
+const TIER_PREMIUM = 'premium';
+
+const normalizeTier = (value) => (String(value || '').trim().toLowerCase() === TIER_REGULAR ? TIER_REGULAR : TIER_PREMIUM);
+
 module.exports = function createSlotPermissionManager({
     baseDir = process.cwd(),
     password = process.env.SLOT_OWNER_PASSWORD || ''
@@ -92,7 +99,7 @@ module.exports = function createSlotPermissionManager({
             return id ? readStore().grants[id] || null : null;
         },
 
-        grant(accountId, note = '', durationHours = 0) {
+        grant(accountId, note = '', durationHours = 0, tier = TIER_PREMIUM) {
             const id = normalizeId(accountId);
             if (!id) return { ok: false, message: 'Discord User ID harus berupa 17–20 digit.' };
 
@@ -103,8 +110,10 @@ module.exports = function createSlotPermissionManager({
             }
 
             const duration = normalizeDurationHours(durationHours);
+            const normalizedTier = normalizeTier(tier);
             store.grants[id] = {
                 status: 'available',
+                tier: normalizedTier,
                 note: String(note || '').trim().slice(0, 120),
                 durationHours: duration,
                 createdAt: new Date().toISOString(),
@@ -112,7 +121,28 @@ module.exports = function createSlotPermissionManager({
                 expiresAt: null
             };
             writeStore(store);
-            return { ok: true, durationHours: duration };
+            return { ok: true, durationHours: duration, tier: normalizedTier };
+        },
+
+        // Tier efektif untuk sebuah akun: pakai tier pada izin bila ada, jika tidak
+        // (data lama / tanpa izin) dianggap premium.
+        getTier(accountId) {
+            const id = normalizeId(accountId);
+            if (!id) return TIER_PREMIUM;
+            const grant = readStore().grants[id];
+            return grant ? normalizeTier(grant.tier) : TIER_PREMIUM;
+        },
+
+        // Ubah tier akun yang sudah punya izin tanpa harus mencabutnya lebih dulu.
+        setTier(accountId, tier) {
+            const id = normalizeId(accountId);
+            if (!id) return { ok: false, message: 'Discord User ID tidak valid.' };
+            const store = readStore();
+            const grant = store.grants[id];
+            if (!grant) return { ok: false, message: 'Izin tidak ditemukan.' };
+            grant.tier = normalizeTier(tier);
+            writeStore(store);
+            return { ok: true, tier: grant.tier };
         },
 
         consume(accountId) {

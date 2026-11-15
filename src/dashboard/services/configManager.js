@@ -6,7 +6,7 @@ const { normalizeMonsterCatcherSettings } = require('../../managers/monsterCatch
 const { normalizeDailySettings } = require('../../managers/daily');
 const { normalizeCookieSettings } = require('../../managers/cookie');
 const { normalizeSendCount } = require('../../utils');
-const { normalizeOtherCommands, normalizeFixedCommands, setSlotEnabled } = require('../../managers/commandSlots');
+const { normalizeOtherCommands, normalizeFixedCommands, setSlotEnabled, lockFixedDelay } = require('../../managers/commandSlots');
 module.exports = function createConfigManager({ configPath, fileService, CONSTANTS }) {
     return {
     get() {
@@ -81,6 +81,8 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
         config.settings.voice = config.settings.voice || { enabled: false, channelId: "" };
         config.otherCommands = normalizeOtherCommands(config.otherCommands);
         config.fixedCommands = normalizeFixedCommands(config.fixedCommands);
+        // Command Tetap selalu dikunci 17-20 detik (semua akun/tier).
+        lockFixedDelay(config);
 
         // Bersihkan properti OwO yang masih tersisa dari profile lama.
         this.dropOwOConfig(config);

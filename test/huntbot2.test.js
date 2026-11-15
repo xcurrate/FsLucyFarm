@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const Huntbot2 = require('../src/managers/Huntbot2');
 const LUCY_ID = require('../src/constants').LUCY_BOT_ID;
 
-function setup({ config = {}, ready = true } = {}) {
+function setup({ config = {}, ready = true, readyDelayMs } = {}) {
     const sent = [];
     const channel = { send: async (cmd) => { sent.push({ cmd, via: 'channel' }); return {}; } };
     const state = {
@@ -25,7 +25,7 @@ function setup({ config = {}, ready = true } = {}) {
             return true;
         }
     };
-    const manager = Huntbot2(state, commandSender);
+    const manager = Huntbot2(state, commandSender, { readyDelayMs });
     return { state, manager, sent };
 }
 
@@ -60,13 +60,27 @@ const lucyMessage = (content, overrides = {}) => ({
 });
 
 test('trigger "siap berburu" memulai siklus lhb sesuai durasi', async () => {
-    const { manager, sent } = setup({ config: { duration: '1D' } });
+    const { manager, sent } = setup({ config: { duration: '1D' }, readyDelayMs: 0 });
     const handled = await manager.handle(lucyMessage('Huntbot siap berburu, Tuan neozen!'));
     assert.equal(handled, true);
 
     // Pengiriman lhb dijadwalkan (bukan langsung), jadi tunggu timer-nya.
     await new Promise(resolve => setTimeout(resolve, 1700));
     assert.ok(sent.some(item => item.cmd === 'lhb 1D'), 'expected lhb 1D to be sent');
+});
+
+test('trigger "siap berburu" menunda 10 detik (default) sebelum siklus lhb', async () => {
+    // Jeda default berasal dari konstanta CAPTCHA_RESUME_DELAY_MS (10 detik).
+    assert.equal(require('../src/constants').CAPTCHA_RESUME_DELAY_MS, 10000);
+
+    const { manager, sent } = setup({ config: { duration: '1D' }, readyDelayMs: 10000 });
+    const handled = await manager.handle(lucyMessage('Huntbot siap berburu, Tuan neozen!'));
+    assert.equal(handled, true);
+
+    await new Promise(resolve => setTimeout(resolve, 40));
+    assert.equal(sent.some(item => item.cmd === 'lhb 1D'), false, 'lhb belum dikirim sebelum jeda 10 detik');
+
+    manager.stop();
 });
 
 test('trigger "siap berburu" mengabaikan channel lain dan fitur nonaktif', async () => {

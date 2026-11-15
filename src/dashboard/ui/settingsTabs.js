@@ -238,7 +238,7 @@ ${renderRestSettings(config.settings?.rest)}
     function renderRestSettings(rest = {}) {
         const schedule = rest.schedule || {};
         const budget = rest.budget || {};
-        const budgetHours = Number.isFinite(Number(budget.maxMinutes)) ? Number(budget.maxMinutes) / 60 : 5;
+        const budgetHours = Number.isFinite(Number(budget.maxMinutes)) ? Number(budget.maxMinutes) / 60 : 3;
         return `
                     <div id="tab-rest" class="tab-content">
                         <div class="category-heading">
@@ -262,9 +262,10 @@ ${renderRestSettings(config.settings?.rest)}
                             </div>
                             <div class="row">
                                 <div class="col"><label>Jam Mulai</label><input type="time" name="restScheduleStart" value="${escapeHtml(schedule.start || '05:00')}"></div>
-                                <div class="col"><label>Jam Selesai</label><input type="time" name="restScheduleEnd" value="${escapeHtml(schedule.end || '10:00')}"></div>
+                                <div class="col"><label>Durasi</label><input type="text" value="3 jam (terkunci)" disabled></div>
                             </div>
-                            <div class="input-hint">Contoh 05:00 – 10:00: loop berhenti jam 05.00 WIB dan lanjut jam 10.00 WIB. Jam mulai lebih besar dari jam selesai berarti melewati tengah malam.</div>
+                            <input type="hidden" name="restScheduleEnd" value="${escapeHtml(schedule.end || '08:00')}">
+                            <div class="input-hint">Durasi Mode 1 terkunci 3 jam: pilih jam mulai, jam selesai dihitung otomatis (mis. mulai 05:00 berakhir 08:00 WIB).</div>
                         </div>
 
                         <div class="card">
@@ -319,6 +320,11 @@ ${renderRestSettings(config.settings?.rest)}
     function renderLucyCommandCards({ config }) {
         const commands = config?.otherCommands || [];
         const needsProfile = !config?.viewingProfileId;
+        const isRegular = String(config?.accountTier || '').toLowerCase() === 'regular';
+        const customMinSec = isRegular ? 16 : 5;
+        const tierHint = isRegular
+            ? '🆓 Tier Reguler: Delay Min minimal 16 detik (dikunci), Delay Max bebas ≥ Min.'
+            : '⭐ Tier Premium: Delay Min minimal 5 detik, Delay Max ≥ Min.';
         return `
                     <div id="tab-lucy-commands" class="tab-content">
                         <div class="category-heading">
@@ -327,7 +333,8 @@ ${renderRestSettings(config.settings?.rest)}
                                 <h3>🧩 Custom Commands Lucy</h3>
                             </div>
                         </div>
-                        <div class="input-hint">Setiap slot dikirim ke channel pilihannya sendiri. Delay memakai rentang min-max (boleh sama). Start menjalankan sejumlah pengiriman yang diatur (kosongkan Jumlah Pengiriman untuk infinite); Stop membatalkan slot tersebut. Pengaturan di sini masuk ke savebar; Start/Stop berlaku langsung.</div>
+                        <div class="input-hint">Setiap slot dikirim ke channel pilihannya sendiri. Delay memakai rentang min-max. Start menjalankan sejumlah pengiriman yang diatur (kosongkan Jumlah Pengiriman untuk infinite); Stop membatalkan slot tersebut. Pengaturan di sini masuk ke savebar; Start/Stop berlaku langsung.</div>
+                        <div class="input-hint">${tierHint}</div>
                         ${needsProfile ? '<div class="card" style="border-color:#a8782f"><label style="color:var(--yellow)">PILIH AKUN DULU</label><p style="color:var(--muted);font-size:13px;line-height:1.6">Custom Commands disimpan per akun. Buka halaman profil akun, lalu atur slotnya di sini.</p></div>' : ''}
                         ${commands.map((command, index) => {
                             const slot = index + 1;
@@ -340,8 +347,8 @@ ${renderRestSettings(config.settings?.rest)}
                                     <label>Command Text</label>
                                     <input type="text" name="other${slot}Text" value="${escapeHtml(command.text)}" placeholder="Contoh: !test">
                                     <div class="row">
-                                        <div class="col"><label>Delay Min (detik)</label><input type="number" min="0" step="1" name="other${slot}DelayMin" value="${minSec}"></div>
-                                        <div class="col"><label>Delay Max (detik)</label><input type="number" min="0" step="1" name="other${slot}DelayMax" value="${maxSec}"></div>
+                                        <div class="col"><label>Delay Min (detik)</label><input type="number" min="${customMinSec}" step="1" name="other${slot}DelayMin" value="${minSec}"></div>
+                                        <div class="col"><label>Delay Max (detik)</label><input type="number" min="${customMinSec}" step="1" name="other${slot}DelayMax" value="${maxSec}"></div>
                                         <div class="col"><label>Jumlah Pengiriman</label><input type="number" min="1" step="1" name="other${slot}Count" value="${isInfinite ? '' : command.count}" placeholder="Kosong = ∞ Infinite"></div>
                                     </div>
                                     <label>Target Channel</label>
@@ -360,8 +367,6 @@ ${renderRestSettings(config.settings?.rest)}
     function renderFixedCommandCard({ config }) {
         const command = config?.fixedCommands || {};
         const isInfinite = !(Number(command.count) > 0);
-        const minSec = Math.floor((command.delayMinMs ?? command.delayMs ?? 0) / 1000);
-        const maxSec = Math.floor((command.delayMaxMs ?? command.delayMinMs ?? command.delayMs ?? 0) / 1000);
         const channel = command.channelId || '';
         const enabled = command.enabled === true;
         return `
@@ -372,14 +377,16 @@ ${renderRestSettings(config.settings?.rest)}
                                 <h3>📌 Command Tetap: lb + lh</h3>
                             </div>
                         </div>
-                        <div class="input-hint">lh + lb adalah <strong>satu pasangan</strong>: selalu dikirim berurutan <strong>lb → "sedang mengetik" → lh</strong>, dan tidak dapat diaktifkan/dimatikan terpisah. Teks sudah terkunci — cukup atur channel, delay, dan jumlah pengiriman (kosongkan = ∞).</div>
+                        <div class="input-hint">lh + lb adalah <strong>satu pasangan</strong>: selalu dikirim berurutan <strong>lb → "sedang mengetik" → lh</strong>, dan tidak dapat diaktifkan/dimatikan terpisah. Teks dan delay sudah terkunci (17–20 detik) — cukup atur channel dan jumlah pengiriman (kosongkan = ∞).</div>
                         <div class="card">
                             <label>Command Tetap: lb + lh <span class="input-hint">(pasangan selalu dikirim)</span></label>
                             <div class="row">
-                                <div class="col"><label>Delay Min (detik)</label><input type="number" min="0" step="1" name="other4DelayMin" value="${minSec}"></div>
-                                <div class="col"><label>Delay Max (detik)</label><input type="number" min="0" step="1" name="other4DelayMax" value="${maxSec}"></div>
+                                <div class="col"><label>Delay Min (detik)</label><input type="number" value="17" disabled></div>
+                                <div class="col"><label>Delay Max (detik)</label><input type="number" value="20" disabled></div>
                                 <div class="col"><label>Jumlah Pengiriman</label><input type="number" min="1" step="1" name="other4Count" value="${isInfinite ? '' : command.count}" placeholder="Kosong = ∞ Infinite"></div>
                             </div>
+                            <input type="hidden" name="other4DelayMin" value="17">
+                            <input type="hidden" name="other4DelayMax" value="20">
                             <label>Target Channel</label>
                             <input type="text" name="other4Channel" value="${escapeHtml(channel)}" placeholder="Discord Channel ID">
                             <div class="action-group" style="margin-top: 12px;">
@@ -393,6 +400,11 @@ ${renderRestSettings(config.settings?.rest)}
     }
 
     function renderLucySettings({ config, boss2 = {}, gems = {}, adventure = {}, monsterCatcher = {}, lucyControl = {}, voice = {} }) {
+        // Fitur premium-only (Auto Adventure, Lucy Daily, Send Cookie) dinonaktifkan
+        // untuk akun Reguler. Penegakan sebenarnya ada di sisi server (/save).
+        const isRegular = String(config?.accountTier || '').toLowerCase() === 'regular';
+        const premiumLockHint = '🔒 Fitur ini hanya untuk tier Premium. Akun Reguler tidak dapat mengaktifkannya.';
+        const premiumDisabled = isRegular ? 'disabled' : '';
         return `
 
                     <div id="tab-lucy-boss2" class="tab-content">
@@ -501,11 +513,12 @@ ${renderRestSettings(config.settings?.rest)}
                         <div class="card">
                             <label>🗺️ AUTO ADVENTURE</label>
                             <div class="input-hint">Memproses response target hanya pada channel yang ditentukan.</div>
+                            ${isRegular ? `<div class="input-hint">${premiumLockHint}</div>` : ''}
                             <label>Adventure Channel ID</label>
-                            <input type="text" name="adventureChannelId" value="${escapeHtml(adventure.channelId || '')}" placeholder="Channel ID">
+                            <input type="text" name="adventureChannelId" value="${escapeHtml(adventure.channelId || '')}" placeholder="Channel ID" ${premiumDisabled}>
                             <div class="action-group" style="margin-top: 12px;">
-                                <button type="submit" name="action" value="adventureStart" class="btn btn-start">▶ AUTO ADVENTURE ON</button>
-                                <button type="submit" name="action" value="adventureStop" class="btn btn-pause">⏸ AUTO ADVENTURE OFF</button>
+                                <button type="submit" name="action" value="adventureStart" class="btn btn-start" ${premiumDisabled}>▶ AUTO ADVENTURE ON</button>
+                                <button type="submit" name="action" value="adventureStop" class="btn btn-pause" ${premiumDisabled}>⏸ AUTO ADVENTURE OFF</button>
                             </div>
                             <span class="input-hint">${adventure.enabled ? '▶ Auto Adventure aktif' : '⏹ Auto Adventure nonaktif'}</span>
                         </div>
@@ -543,13 +556,14 @@ ${renderRestSettings(config.settings?.rest)}
                         <div class="card">
                             <label>🗓️ LUCY DAILY</label>
                             <div class="input-hint">Setiap kali <strong>startup</strong> bot mengirim command daily sekali, lalu otomatis mengulang tiap <strong>00:00 WIB</strong> selama tidak restart. Channel mengikuti <strong>channel command utama</strong> (Custom Commands / Command Tetap), jadi tidak perlu diisi di sini. Balasan Lucy yang memuat nama server dan "streak harianmu xx hari!" ditangkap otomatis.</div>
+                            ${isRegular ? `<div class="input-hint">${premiumLockHint}</div>` : ''}
                             <div class="toggle-row">
                                 <span>Aktifkan Lucy Daily</span>
-                                <input type="checkbox" name="dailyEnabled" ${config.settings?.daily?.enabled ? 'checked' : ''}>
+                                <input type="checkbox" name="dailyEnabled" ${config.settings?.daily?.enabled ? 'checked' : ''} ${premiumDisabled}>
                             </div>
                             <div class="input-hint daily-status-line"><span data-daily-status>Memuat status...</span></div>
                             <label>Command Daily</label>
-                            <input type="text" name="dailyCommand" value="${escapeHtml(config.settings?.daily?.command || 'lucy daily')}" placeholder="lucy daily">
+                            <input type="text" name="dailyCommand" value="${escapeHtml(config.settings?.daily?.command || 'lucy daily')}" placeholder="lucy daily" ${premiumDisabled}>
                         </div>
 
                         <div class="category-heading" style="margin-top:24px">
@@ -561,19 +575,20 @@ ${renderRestSettings(config.settings?.rest)}
                         <div class="card">
                             <label>🍪 SEND COOKIE</label>
                             <div class="input-hint">Setiap kali <strong>startup</strong> bot mengirim <code>lucy rep</code> ke target terpilih, lalu otomatis mengulang tiap <strong>00:00 WIB</strong>. Channel mengikuti <strong>channel command utama</strong>. Target kosong = kirim <code>lucy rep</code> saja.</div>
+                            ${isRegular ? `<div class="input-hint">${premiumLockHint}</div>` : ''}
                             <div class="toggle-row">
                                 <span>Aktifkan Send Cookie</span>
-                                <input type="checkbox" name="cookieEnabled" ${config.settings?.cookie?.enabled ? 'checked' : ''}>
+                                <input type="checkbox" name="cookieEnabled" ${config.settings?.cookie?.enabled ? 'checked' : ''} ${premiumDisabled}>
                             </div>
                             <div class="input-hint daily-status-line"><span data-cookie-status>Memuat status...</span></div>
                             <label>Command</label>
-                            <input type="text" name="cookieCommand" value="${escapeHtml(config.settings?.cookie?.command || 'lucy rep')}" placeholder="lucy rep">
+                            <input type="text" name="cookieCommand" value="${escapeHtml(config.settings?.cookie?.command || 'lucy rep')}" placeholder="lucy rep" ${premiumDisabled}>
                             <label>Target User ID (kosong = tanpa target)</label>
-                            <input type="text" name="cookieTargetId" value="${escapeHtml(config.settings?.cookie?.targetId || '')}" placeholder="1587263872638888">
+                            <input type="text" name="cookieTargetId" value="${escapeHtml(config.settings?.cookie?.targetId || '')}" placeholder="1587263872638888" ${premiumDisabled}>
                             <label>Mode Ping</label>
                             <div style="margin:8px 0;">
-                                <label style="display:inline-flex;align-items:center;gap:8px;margin-right:16px;"><input type="radio" name="cookiePingMode" value="ping" ${config.settings?.cookie?.ping ? 'checked' : ''}><span>Ping — <code>lucy rep &lt;@ID&gt;</code></span></label>
-                                <label style="display:inline-flex;align-items:center;gap:8px;"><input type="radio" name="cookiePingMode" value="noping" ${config.settings?.cookie?.ping ? '' : 'checked'}><span>No ping — <code>lucy rep ID</code></span></label>
+                                <label style="display:inline-flex;align-items:center;gap:8px;margin-right:16px;"><input type="radio" name="cookiePingMode" value="ping" ${config.settings?.cookie?.ping ? 'checked' : ''} ${premiumDisabled}><span>Ping — <code>lucy rep &lt;@ID&gt;</code></span></label>
+                                <label style="display:inline-flex;align-items:center;gap:8px;"><input type="radio" name="cookiePingMode" value="noping" ${config.settings?.cookie?.ping ? '' : 'checked'} ${premiumDisabled}><span>No ping — <code>lucy rep ID</code></span></label>
                             </div>
                         </div>
                     </div>
@@ -670,6 +685,9 @@ ${renderRestSettings(config.settings?.rest)}
             .filter(command => String(command?.text || '').trim()).length;
         const badge = (text) => text ? ` <span class="badge">${escapeHtml(text)}</span>` : '';
         const onBadge = (settings) => settings?.enabled ? 'ON' : '';
+        // Penanda fitur premium-only agar akun Reguler tahu fitur terkunci.
+        const isRegularTier = String(context?.config?.accountTier || '').toLowerCase() === 'regular';
+        const premiumBadge = () => isRegularTier ? ' <span class="badge">🔒 Premium</span>' : '';
         const commandsMenuGroup = isProfilePage
             ? `<div class="settings-menu-group"><span>Commands Lucy</span>
                             <button type="button" class="settings-menu-item" data-menu-label="Custom Commands" onclick="switchTab(event, 'tab-lucy-commands')">🧩 Custom Commands${badge(customCount ? String(customCount) : '')}</button>
@@ -692,15 +710,15 @@ ${commandsMenuGroup}
                         <div class="settings-menu-group"><span>Fitur Lucy</span>
                             <button type="button" class="settings-menu-item" data-menu-label="Auto Boss2" onclick="switchTab(event, 'tab-lucy-boss2')">🐲 Auto Boss2${badge(onBadge(context?.config?.settings?.boss2))}</button>
                             <button type="button" class="settings-menu-item" data-menu-label="Auto Use Gems" onclick="switchTab(event, 'tab-lucy-gems')">💎 Auto Use Gems</button>
-                            <button type="button" class="settings-menu-item" data-menu-label="Auto Adventure" onclick="switchTab(event, 'tab-lucy-adventure')">🗺️ Auto Adventure</button>
+                            <button type="button" class="settings-menu-item" data-menu-label="Auto Adventure" onclick="switchTab(event, 'tab-lucy-adventure')">🗺️ Auto Adventure${premiumBadge()}</button>
                             <button type="button" class="settings-menu-item" data-menu-label="Huntbot2" onclick="switchTab(event, 'tab-lucy-huntbot2')">🤖 Huntbot2</button>
                             <button type="button" class="settings-menu-item" data-menu-label="Monster Catcher" onclick="switchTab(event, 'tab-lucy-monster-catcher')">🐾 Monster Catcher <span class="badge">NEW</span></button>
                             <button type="button" class="settings-menu-item" data-menu-label="Voice Channel" onclick="switchTab(event, 'tab-lucy-voice')">🔊 Voice Channel</button>
                             <button type="button" class="settings-menu-item" data-menu-label="Kontrol Lucy" onclick="switchTab(event, 'tab-lucy-control')">🎮 Kontrol Lucy</button>
                         </div>
                         <div class="settings-menu-group"><span>Daily</span>
-                            <button type="button" class="settings-menu-item" data-menu-label="Lucy Daily" onclick="switchTab(event, 'tab-daily')">🗓️ Lucy Daily${badge(onBadge(context?.config?.settings?.daily))}</button>
-                            <button type="button" class="settings-menu-item" data-menu-label="Send Cookie" onclick="switchTab(event, 'tab-daily')">🍪 Send Cookie${badge(onBadge(context?.config?.settings?.cookie))}</button>
+                            <button type="button" class="settings-menu-item" data-menu-label="Lucy Daily" onclick="switchTab(event, 'tab-daily')">🗓️ Lucy Daily${badge(onBadge(context?.config?.settings?.daily))}${premiumBadge()}</button>
+                            <button type="button" class="settings-menu-item" data-menu-label="Send Cookie" onclick="switchTab(event, 'tab-daily')">🍪 Send Cookie${badge(onBadge(context?.config?.settings?.cookie))}${premiumBadge()}</button>
                         </div>
                         <div class="settings-menu-group"><span>Sistem</span>
                             <button type="button" class="settings-menu-item" data-menu-label="Notifikasi" onclick="switchTab(event, 'tab-notifications')">📱 Notifikasi</button>

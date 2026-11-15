@@ -18,6 +18,9 @@ const STARTUP_DELAY_MS = 3000;
 // selalu didahulukan. Batas tunggu mencegah startup tertahan selamanya.
 const STARTUP_QUEUE_IDLE_MS = 1200;
 const STARTUP_QUEUE_MAX_WAIT_MS = 90000;
+// Jeda setelah captcha/password terverifikasi ("siap berburu") sebelum siklus lhb
+// diulang, supaya Lucy selesai memproses aksi sebelumnya.
+const READY_RESUME_DELAY_MS = CONSTANTS.CAPTCHA_RESUME_DELAY_MS;
 
 function normalizeSettings(raw = {}) {
     const inputDuration = String(raw.duration || DEFAULTS.duration).trim().toUpperCase();
@@ -70,8 +73,12 @@ function extractImageUrl(msg) {
 }
 function parseReturnTime(text) { return cleanText(text).match(RETURN_TIME_PATTERN)?.[1]?.trim() || null; }
 
-module.exports = function createHuntbot2Manager(state, commandSender) {
+module.exports = function createHuntbot2Manager(state, commandSender, options = {}) {
     const runLucyAction = (action) => commandSender?.runLucyAction ? commandSender.runLucyAction(action) : action();
+    // Jeda trigger "siap berburu" dapat di-inject untuk pengujian.
+    const readyResumeDelayMs = Number.isFinite(options.readyDelayMs)
+        ? Math.max(0, options.readyDelayMs)
+        : READY_RESUME_DELAY_MS;
     const handled = new Set(), timers = new Set();
     let pendingAction = null;
     const prefix = () => accountPrefix(state) + '🤖 Huntbot2: ';
@@ -257,7 +264,7 @@ module.exports = function createHuntbot2Manager(state, commandSender) {
                 if (markHandled(msg)) return false;
                 // Trigger "siap berburu": mulai siklus lhb (mis. lhb 1D).
                 log.success(prefix() + 'Trigger "' + READY_TRIGGER_TEXT + '" terdeteksi; memulai siklus lhb.');
-                scheduleHunt(1500, settings().duration);
+                scheduleHunt(readyResumeDelayMs, settings().duration);
                 return true;
             }
             if (lower.includes(myName) && lower.includes('huntbot') && lower.includes('saya akan berburu untukmu tuan')) {
