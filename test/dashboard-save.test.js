@@ -1,0 +1,861 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const createDashboardApp = require('../src/dashboard/app');
+
+function authHeader() {
+    return `Basic ${Buffer.from('dashboard:zuya2000').toString('base64')}`;
+}
+
+async function withDashboard(callback) {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-save-'));
+    fs.writeFileSync(path.join(baseDir, 'config.json'), JSON.stringify({ token: '', settings: {} }));
+    const { app } = createDashboardApp({ baseDir });
+    const server = app.listen(0);
+    await new Promise(resolve => server.once('listening', resolve));
+
+    try {
+        await callback(`http://127.0.0.1:${server.address().port}`, baseDir);
+    } finally {
+        await new Promise(resolve => server.close(resolve));
+        fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+}
+
+// Builds a fake Discord token whose first segment decodes to the given user id.
+function makeToken(id) {
+    const base64Id = Buffer.from(id, 'utf8').toString('base64').replace(/=+$/, '');
+    return `${base64Id}.abcdef.ghijkl`;
+}
+
+async function withSeededDashboard({ mainConfig, profiles = {} }, callback) {
+    const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-save-'));
+    fs.writeFileSync(path.join(baseDir, 'config.json'), JSON.stringify(mainConfig));
+    const profilesDir = path.join(baseDir, 'profiles');
+    fs.mkdirSync(profilesDir, { recursive: true });
+    for (const [id, config] of Object.entries(profiles)) {
+        fs.writeFileSync(path.join(profilesDir, `config_${id}.json`), JSON.stringify(config));
+    }
+
+    const { app } = createDashboardApp({ baseDir });
+    const server = app.listen(0);
+    await new Promise(resolve => server.once('listening', resolve));
+
+    try {
+        await callback(`http://127.0.0.1:${server.address().port}`, baseDir);
+    } finally {
+        await new Promise(resolve => server.close(resolve));
+        fs.rmSync(baseDir, { recursive: true, force: true });
+    }
+}
+
+test('POST /save parses URL-encoded dashboard data and reports persistence as JSON', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({ action: 'save', token: 'ignored-token', chan1: '12345' })
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { success: true, message: 'Configuration saved' });
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.equal(savedConfig.token, '', 'template token card removed: submitted token is ignored');
+        assert.equal(savedConfig.channels, undefined, 'channel card removed: no channels persisted');
+    });
+});
+
+test('POST /save returns a JSON failure for an invalid AJAX action request', async () => {
+    await withDashboard(async (url) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({ action: 'loadProfile' })
+        });
+
+        assert.equal(response.status, 400);
+        assert.deepEqual(await response.json(), { success: false, message: 'Profile must be selected' });
+    });
+});
+
+test('POST /save uses the JSON Accept header when the AJAX header is unavailable', async () => {
+    await withDashboard(async (url) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({ action: 'save', token: 'accept-header-token' })
+        });
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), { success: true, message: 'Configuration saved' });
+    });
+});
+
+test('dashboard renders an accessible save status toast', async () => {
+    await withDashboard(async (url) => {
+        const response = await fetch(url, { headers: { Authorization: authHeader() } });
+        const html = await response.text();
+
+        assert.equal(response.status, 200);
+        assert.match(html, /id="saveToast" class="save-toast" role="status" aria-live="polite"/);
+        assert.match(html, /function toUrlEncodedBody\(formData\)/);
+        assert.match(html, /credentials: 'include'/);
+        assert.match(html, /const saveUrl = form\.getAttribute\('action'\) \|\| '\/save';/);
+        assert.doesNotMatch(html, /fetch\(form\.action,/);
+        assert.match(html, /showToast\('success', 'Tersimpan'\)/);
+        assert.match(html, /showToast\('error', error\.message \? 'Gagal: ' \+ error\.message : 'Gagal'\)/);
+    });
+});
+
+test('Lucy Custom Commands never enable CAPTCHA, even if a legacy field is submitted', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                other1Text: '!test',
+                other1Channel: '12345',
+                other1Delay: '5',
+                other1Count: '10',
+                other1Captcha: 'on'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.equal(savedConfig.otherCommands[0].text, '!test');
+        assert.deepEqual(savedConfig.otherCommands.map(command => command.captchaEnabled), [undefined, undefined, undefined]);
+    });
+});
+
+test('POST /save persists fixed lb/lh pair (single config synced to both slots) separately from custom commands', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                other1Text: '!custom',
+                other1Channel: '111',
+                other1Delay: '3',
+                other1Count: '1',
+                other4DelayMin: '4',
+                other4DelayMax: '6',
+                other4Channel: '222',
+                other4Count: '0'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.equal(savedConfig.fixedCommands.channelId, '222');
+        assert.equal(savedConfig.fixedCommands.delayMinMs, 4000);
+        assert.equal(savedConfig.fixedCommands.delayMaxMs, 6000);
+        assert.equal(savedConfig.fixedCommands.count, 0);
+        assert.equal(savedConfig.otherCommands[0].text, '!custom');
+        assert.equal(savedConfig.otherCommands[0].channelId, '111');
+    });
+});
+
+test('control panel shows Multi Account, profile page shows Custom Commands, and nav buttons separate them', async () => {
+    const profileId = '100000000000000007';
+    const profileConfig = {
+        token: makeToken(profileId),
+        botStatus: { running: false, paused: true },
+        settings: {},
+        otherCommands: [{ text: '!profile', delayMs: 5000, count: 0, channelId: '555', enabled: false }]
+    };
+
+    await withSeededDashboard({
+        mainConfig: { token: '', settings: {}, multiAccount: { enabled: true, maxAccounts: 2 } },
+        profiles: { [profileId]: profileConfig }
+    }, async (url) => {
+        const auth = { Authorization: authHeader() };
+        const controlPanel = await (await fetch(url, { headers: auth })).text();
+        // Control panel: kartu Multi Account + tombol menuju halaman profil.
+        assert.match(controlPanel, /👥 Akun Tersimpan/);
+        assert.match(controlPanel, new RegExp(`href="/\\?profileId=${profileId}"`));
+        assert.match(controlPanel, /👤 HALAMAN PROFIL/);
+        assert.match(controlPanel, /🏠 Menu Utama/);
+        // Tab Custom Commands & Command Tetap tidak ada di control panel.
+        assert.doesNotMatch(controlPanel, /id="tab-lucy-commands"/);
+        assert.doesNotMatch(controlPanel, /id="tab-lucy-fixed"/);
+
+        const profilePage = await (await fetch(`${url}/?profileId=${profileId}`, { headers: auth })).text();
+        // Halaman profil: tab Custom Commands + Command Tetap + tombol kembali ke menu utama.
+        assert.match(profilePage, /id="tab-lucy-commands"/);
+        assert.match(profilePage, /id="tab-lucy-fixed"/);
+        assert.match(profilePage, /Custom Command Lucy 1/);
+        assert.match(profilePage, /⌂ MENU UTAMA/);
+        assert.match(profilePage, /👤 Profil Akun/);
+        // Kartu Multi Account tidak ada di halaman profil.
+        assert.doesNotMatch(profilePage, /👥 Akun Tersimpan/);
+        assert.doesNotMatch(profilePage, /👤 HALAMAN PROFIL/);
+    });
+});
+
+test('POST /save persists Lucy Discord control and the dashboard renders the Lucy menu', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                ctrlStart: 'wcash',
+                lucyCtrlStart: 'lgo',
+                lucyCtrlPause: 'lstop',
+                lucyCtrlAllowIds: '111, 222'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.deepEqual(savedConfig.settings.lucyControl, { start: 'lgo', pause: 'lstop', allowIds: ['111', '222'] });
+        assert.equal(savedConfig.settings.control, undefined);
+
+        const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(page, /class="section-label">Lucy</);
+        for (const tabId of ['tab-lucy-boss2', 'tab-lucy-gems', 'tab-lucy-adventure', 'tab-lucy-control']) {
+            assert.match(page, new RegExp(`id="${tabId}"`));
+            assert.match(page, new RegExp(`switchTab\\(event, '${tabId}'\\)`));
+        }
+        // Custom Commands adalah kartu halaman PROFIL, bukan control panel.
+        assert.doesNotMatch(page, /id="lucy-command-cards"/);
+        assert.doesNotMatch(page, /Custom Command Lucy 1/);
+        assert.doesNotMatch(page, /id="tab-lucy-commands"/);
+        assert.doesNotMatch(page, /tab-other/);
+        assert.doesNotMatch(page, /name="other1Captcha"/);
+        assert.match(page, /LUCY DISCORD CONTROL/);
+        assert.match(page, /name="lucyCtrlStart" value="lgo"/);
+        assert.match(page, /name="lucyCtrlAllowIds" value="111,222"/);
+        assert.doesNotMatch(page, /name="text1"/);
+
+        assert.doesNotMatch(page, /tab-automation/);
+        assert.doesNotMatch(page, /data-menu-label="Automasi OwO"/);
+        assert.doesNotMatch(page, /HUNTBOT AUTOMATION/);
+        assert.match(page, /name="hb2Enabled"/);
+        assert.match(page, /name="voiceEnabled"/);
+        assert.doesNotMatch(page, /name="rotationEnabled"/);
+        assert.doesNotMatch(page, /name="bossEnabled"/);
+        assert.doesNotMatch(page, /name="captchaPrimary"/);
+        assert.doesNotMatch(page, /name="twoCaptchaKey"/);
+    });
+});
+
+test('Message Debug settings persist target, channel, and guild filters', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                messageDebugEnabled: 'on',
+                messageDebugTargetId: '111',
+                messageDebugChannelId: '222',
+                messageDebugGuildId: '333'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.deepEqual(savedConfig.settings.messageDebug, {
+            enabled: true,
+            targetId: '111',
+            channelId: '222',
+            guildId: '333'
+        });
+    });
+});
+
+test('dashboard renders Message Debug controls and raw JSON output', async () => {
+    await withDashboard(async (url) => {
+        const response = await fetch(url, { headers: { Authorization: authHeader() } });
+        const html = await response.text();
+
+        assert.equal(response.status, 200);
+        assert.match(html, /data-menu-label="Debug Pesan"/);
+        assert.match(html, /name="messageDebugTargetId"/);
+        assert.match(html, /name="messageDebugChannelId"/);
+        assert.match(html, /name="messageDebugGuildId"/);
+        assert.match(html, /id="messageDebugOutput"/);
+        assert.match(html, /id="copyMessageDebugButton"/);
+        assert.match(html, /id="clearMessageDebugButton"/);
+    });
+});
+
+test('POST /save persists Auto Boss2 settings and the dashboard renders them', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                boss2Enabled: 'on',
+                boss2Guilds: 'g1, g2',
+                boss2ChannelIds: 'c1',
+                boss2BotIds: 'bot1',
+                boss2AppearText: 'Guild Boss Telah Muncul',
+                boss2DefeatedText: 'Boss Telah Dikalahkan',
+                boss2ButtonId: 'raid:fight',
+                boss2FightsPerBoss: '2',
+                boss2DelayMin: '1000',
+                boss2DelayMax: '3000'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.deepEqual(savedConfig.settings.boss2, {
+            enabled: true,
+            allowedGuilds: ['g1', 'g2'],
+            channelIds: ['c1'],
+            botIds: ['bot1'],
+            appearText: 'Guild Boss Telah Muncul',
+            defeatedText: 'Boss Telah Dikalahkan',
+            buttonId: 'raid:fight',
+            fightsPerBoss: 2,
+            delayMinMs: 1000,
+            delayMaxMs: 3000
+        });
+
+        const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(page, /AUTO BOSS2/);
+        assert.match(page, /name="boss2ButtonId" value="raid:fight"/);
+    });
+});
+
+test('POST /save persists Auto Use Gems settings and the dashboard renders them', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                gemsEnabled: 'on',
+                gemsChannelId: 'c1',
+                gemsBotIds: 'lucy',
+                gemsAccountName: 'neozen',
+                gemsTriggerText: 'menghabiskan 5 <:lucent:1523362382355759266>',
+                gemsInventoryCommand: 'linv',
+                gemsLootboxItem: '049',
+                gemsLootboxCommand: 'llb f all',
+                gemsRequired: '57, 71, 78',
+                gemsOptional: '85',
+                gemsUseCommand: 'luse',
+                gemsRecheckMinutes: '5',
+                gemsDelayMin: '1000',
+                gemsDelayMax: '2000'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        const gems = savedConfig.settings.gems;
+        assert.equal(gems.enabled, true);
+        assert.equal(gems.channelId, 'c1');
+        assert.deepEqual(gems.botIds, ['lucy']);
+        assert.equal(gems.accountName, 'neozen');
+        assert.deepEqual(gems.requiredGems, ['57', '71', '78']);
+        assert.deepEqual(gems.optionalGems, ['85']);
+        assert.equal(gems.recheckMinutes, 5);
+        assert.equal(gems.delayMaxMs, 2000);
+
+        const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(page, /AUTO USE GEMS/);
+        assert.match(page, /name="gemsLootboxCommand" value="llb f all"/);
+    });
+});
+
+test('POST /save persists Lucy Daily + Send Cookie settings and renders the tab', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                dailyEnabled: 'on',
+                dailyCommand: 'lucy daily',
+                cookieEnabled: 'on',
+                cookieCommand: 'lucy rep',
+                cookieTargetId: '1587263872638888',
+                cookiePingMode: 'ping'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        const daily = savedConfig.settings.daily;
+        assert.equal(daily.enabled, true);
+        assert.equal(daily.command, 'lucy daily');
+        assert.equal('channelId' in daily, false, 'daily tidak lagi punya slot channel sendiri');
+
+        const cookie = savedConfig.settings.cookie;
+        assert.equal(cookie.enabled, true);
+        assert.equal(cookie.command, 'lucy rep');
+        assert.equal(cookie.targetId, '1587263872638888');
+        assert.equal(cookie.ping, true);
+
+        const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(page, /LUCY DAILY/);
+        assert.match(page, /SEND COOKIE/);
+        assert.match(page, /name="cookieTargetId" value="1587263872638888"/);
+        assert.doesNotMatch(page, /name="dailyChannelId"/);
+    });
+});
+
+test('POST /save stores empty Lucy send count as infinite and persists Istirahat settings', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                other1Text: '!a', other1Channel: '1', other1Delay: '5', other1Count: '',
+                other2Text: '!b', other2Channel: '2', other2Delay: '5', other2Count: '7',
+                restScheduleEnabled: 'on', restScheduleStart: '05:00', restScheduleEnd: '10:00',
+                restBudgetEnabled: 'on', restBudgetHours: '5', restBudgetMinSession: '20', restBudgetMaxSession: '45'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.equal(savedConfig.otherCommands[0].count, 0);
+        assert.equal(savedConfig.otherCommands[1].count, 7);
+        assert.deepEqual(savedConfig.settings.rest, {
+            schedule: { enabled: true, start: '05:00', end: '10:00' },
+            budget: { enabled: true, maxMinutes: 300, minSessionMinutes: 20, maxSessionMinutes: 45 }
+        });
+
+        // Custom Commands hanya tampil di halaman profil; setelan Istirahat di tab Settings.
+        const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(page, /id="tab-rest"/);
+        assert.match(page, /switchTab\(event, 'tab-rest'\)/);
+        assert.match(page, /name="restScheduleStart" value="05:00"/);
+        assert.match(page, /name="restBudgetHours" value="5"/);
+        assert.match(page, /id="restStatus"/);
+    });
+});
+
+test('GET /api/rest-status responds with an account list', async () => {
+    await withDashboard(async (url) => {
+        const response = await fetch(`${url}/api/rest-status`, { headers: { Authorization: authHeader() } });
+        assert.equal(response.status, 200);
+        assert.ok(Array.isArray((await response.json()).accounts));
+    });
+});
+
+test('MULTI ACCOUNT chip actions keep the target profile configuration intact', async () => {
+    const mainId = '100000000000000001';
+    const profileId = '100000000000000002';
+    const profileConfig = {
+        token: makeToken(profileId),
+        botStatus: { running: true, paused: false },
+        settings: { messageFilter: { enabled: true, channelIds: ['999'], guildIds: ['888'], debug: false } },
+        otherCommands: [{ text: '!profile', delayMs: 7000, count: 3, channelId: '555', enabled: true }]
+    };
+
+    for (const action of ['connect', 'start', 'pause']) {
+        await withSeededDashboard({
+            mainConfig: {
+                token: makeToken(mainId),
+                botStatus: { running: false, paused: true },
+                multiAccount: { enabled: true, maxAccounts: 2 },
+                settings: {},
+                otherCommands: [{ text: '!main', delayMs: 5000, count: 1, channelId: '111', enabled: false }]
+            },
+            profiles: { [profileId]: profileConfig }
+        }, async (url, baseDir) => {
+            // The chip buttons submit the whole control-panel form together with profileAction.
+            const response = await fetch(`${url}/save`, {
+                method: 'POST',
+                headers: {
+                    Authorization: authHeader(),
+                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    Accept: 'application/json'
+                },
+                body: new URLSearchParams({
+                    profileAction: `${action}:${profileId}`,
+                    token: makeToken(mainId),
+                    other1Text: '!main',
+                    other1Channel: '111',
+                    other1Delay: '5',
+                    other1Count: '1',
+                    mfEnabled: 'on',
+                    mfChannelIds: '',
+                    mfGuildIds: ''
+                })
+            });
+
+            assert.equal(response.status, 200);
+            assert.deepEqual(await response.json(), { success: true, message: 'Account action completed' });
+
+            const savedProfile = JSON.parse(fs.readFileSync(path.join(baseDir, 'profiles', `config_${profileId}.json`), 'utf8'));
+            assert.deepEqual(savedProfile.settings.messageFilter, { enabled: true, channelIds: ['999'], guildIds: ['888'], debug: false }, `chip ${action} must not reset profile settings`);
+            assert.equal(savedProfile.otherCommands[0].text, '!profile');
+            assert.equal(savedProfile.otherCommands[0].channelId, '555');
+            assert.equal(savedProfile.token, makeToken(profileId), `chip ${action} must preserve the profile token`);
+
+            const expectedRunning = action === 'start';
+            assert.deepEqual(savedProfile.botStatus, { running: expectedRunning, paused: !expectedRunning }, `chip ${action} must only change the account status`);
+        });
+    }
+});
+
+test('MULTI ACCOUNT chip start for the main account keeps the main configuration intact', async () => {
+    const mainId = '100000000000000001';
+    const mainConfig = {
+        token: makeToken(mainId),
+        botStatus: { running: false, paused: true },
+        multiAccount: { enabled: true, maxAccounts: 2 },
+        settings: { messageFilter: { enabled: true, channelIds: ['777'], guildIds: ['666'], debug: false } },
+        otherCommands: [{ text: '!main', delayMs: 5000, count: 1, channelId: '111', enabled: false }]
+    };
+
+    await withSeededDashboard({ mainConfig, profiles: {} }, async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                profileAction: `start:${mainId}`,
+                token: makeToken(mainId),
+                other1Text: '',
+                other1Channel: '',
+                other1Delay: '',
+                other1Count: '',
+                mfEnabled: 'on',
+                mfChannelIds: '',
+                mfGuildIds: ''
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedMain = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.deepEqual(savedMain.settings.messageFilter, { enabled: true, channelIds: ['777'], guildIds: ['666'], debug: false }, 'main config settings must not be reset by its own chip');
+        assert.equal(savedMain.otherCommands[0].text, '!main');
+        assert.deepEqual(savedMain.botStatus, { running: true, paused: false });
+    });
+});
+
+test('saving while a profile is paused keeps the enabled flags (no reconcile clobber)', async () => {
+    const profileId = '100000000000000009';
+    const profileConfig = {
+        token: makeToken(profileId),
+        botStatus: { running: false, paused: true },
+        settings: { monsterCatcher: { enabled: false } },
+        otherCommands: [],
+        fixedCommands: { channelId: 'c', delayMinMs: 3000, delayMaxMs: 3000, count: 0, enabled: true }
+    };
+
+    await withSeededDashboard({
+        mainConfig: { token: '', settings: {}, multiAccount: { enabled: true, maxAccounts: 2 } },
+        profiles: { [profileId]: profileConfig }
+    }, async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                viewingProfileId: profileId,
+                mcEnabled: 'on',
+                other4Channel: 'c',
+                other4DelayMin: '3',
+                other4DelayMax: '3',
+                other4Count: ''
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const saved = JSON.parse(fs.readFileSync(path.join(baseDir, 'profiles', `config_${profileId}.json`), 'utf8'));
+        assert.equal(saved.settings.monsterCatcher.enabled, true, 'enabling a feature while paused must persist');
+        assert.equal(saved.botStatus.paused, true, 'saving must not start the account');
+    });
+});
+
+// Regresi: tombol "START ALL COMMANDS" di control panel tidak merender input
+// command apa pun, jadi form hanya mengirim `action`. applySave tidak boleh
+// mengosongkan teks/channel command yang sudah diatur di halaman profil.
+test('control panel START ALL does not wipe configured Custom Commands and lb/lh channel', async () => {
+    const mainId = '100000000000000001';
+    const mainConfig = {
+        token: makeToken(mainId),
+        botStatus: { running: false, paused: true },
+        multiAccount: { enabled: true, maxAccounts: 2 },
+        settings: {},
+        otherCommands: [
+            { text: '!c1', delayMs: 5000, delayMinMs: 5000, delayMaxMs: 5000, count: 5, channelId: '111', enabled: true },
+            { text: '!c2', delayMs: 5000, delayMinMs: 5000, delayMaxMs: 5000, count: 3, channelId: '222', enabled: true },
+            { text: '', delayMs: 5000, delayMinMs: 5000, delayMaxMs: 5000, count: 0, channelId: '', enabled: false }
+        ],
+        fixedCommands: { delayMs: 5000, delayMinMs: 5000, delayMaxMs: 5000, count: 0, channelId: '333', enabled: true }
+    };
+
+    await withSeededDashboard({ mainConfig, profiles: {} }, async (url, baseDir) => {
+        // Persis seperti submit tombol START ALL: tanpa field otherN* sama sekali.
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({ action: 'start' })
+        });
+
+        assert.equal(response.status, 200);
+        const saved = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.equal(saved.otherCommands[0].text, '!c1', 'custom 1 text preserved');
+        assert.equal(saved.otherCommands[0].channelId, '111', 'custom 1 channel preserved');
+        assert.equal(saved.otherCommands[1].text, '!c2', 'custom 2 text preserved');
+        assert.equal(saved.otherCommands[1].channelId, '222', 'custom 2 channel preserved');
+        assert.equal(saved.fixedCommands.channelId, '333', 'lb/lh channel preserved');
+        assert.equal(saved.fixedCommands.count, 0, 'lb/lh infinite count preserved');
+        assert.deepEqual(saved.botStatus, { running: true, paused: false }, 'START ALL still starts the account');
+    });
+});
+
+test('profile-page save still clears a command when its field is explicitly emptied', async () => {
+    const mainId = '100000000000000001';
+    const mainConfig = {
+        token: makeToken(mainId),
+        botStatus: { running: false, paused: true },
+        multiAccount: { enabled: true, maxAccounts: 2 },
+        settings: {},
+        otherCommands: [
+            { text: '!c1', delayMs: 5000, delayMinMs: 5000, delayMaxMs: 5000, count: 5, channelId: '111', enabled: true }
+        ],
+        fixedCommands: { delayMs: 5000, delayMinMs: 5000, delayMaxMs: 5000, count: 0, channelId: '333', enabled: true }
+    };
+
+    await withSeededDashboard({ mainConfig, profiles: {} }, async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({ action: 'save', other1Text: '', other1Channel: '', other4Channel: '' })
+        });
+
+        assert.equal(response.status, 200);
+        const saved = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.equal(saved.otherCommands[0].text, '', 'explicitly emptied custom text stays empty');
+        assert.equal(saved.otherCommands[0].channelId, '', 'explicitly emptied custom channel stays empty');
+        assert.equal(saved.fixedCommands.channelId, '', 'explicitly emptied lb/lh channel stays empty');
+    });
+});
+
+
+// Regresi: bot menulis config.json/profiles relatif ke cwd-nya, sementara modul
+// dashboard ada di folder aplikasi. Bila keduanya berbeda (umum di panel
+// hosting), kartu "Akun Tersimpan" dulu menampilkan "0 akun" padahal profil ada.
+test('control panel lists saved accounts from the bot working directory', async () => {
+    const { resolveBaseDir } = require('../src/appPaths');
+    const botDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-cwd-'));
+    const originalCwd = process.cwd();
+    try {
+        fs.writeFileSync(path.join(botDir, 'config.json'), JSON.stringify({ token: '', settings: {} }));
+        const profilesDir = path.join(botDir, 'profiles');
+        fs.mkdirSync(profilesDir, { recursive: true });
+        const id = '481927365500000001';
+        fs.writeFileSync(path.join(profilesDir, `config_${id}.json`), JSON.stringify({
+            token: makeToken(id),
+            botStatus: { running: true, paused: false },
+            settings: {}
+        }));
+        fs.writeFileSync(path.join(profilesDir, 'meta.json'), JSON.stringify({
+            profiles: { [id]: { username: 'yth_dzula', globalName: 'yth_dzula' } }
+        }));
+
+        process.chdir(botDir);
+        assert.equal(resolveBaseDir(), botDir, 'resolver follows the bot working directory');
+
+        const { app } = createDashboardApp();
+        const server = app.listen(0);
+        await new Promise(resolve => server.once('listening', resolve));
+
+        try {
+            const response = await fetch(`http://127.0.0.1:${server.address().port}/`, {
+                headers: { Authorization: authHeader() }
+            });
+            const html = await response.text();
+            assert.match(html, /👥 Akun Tersimpan/);
+            assert.match(html, /1 akun/);
+            assert.match(html, /yth_dzula/);
+            assert.doesNotMatch(html, /Belum ada profil tersimpan/);
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
+    } finally {
+        process.chdir(originalCwd);
+        fs.rmSync(botDir, { recursive: true, force: true });
+    }
+});
+
+test('control panel opens on Menu Utama (tab-main), not Ringkasan', async () => {
+    const profileId = '100000000000000008';
+    await withSeededDashboard({
+        mainConfig: { token: '', settings: {}, multiAccount: { enabled: true, maxAccounts: 1 } },
+        profiles: {
+            [profileId]: { token: makeToken(profileId), botStatus: { running: false, paused: true }, settings: {} }
+        }
+    }, async (url) => {
+        const auth = { Authorization: authHeader() };
+
+        const controlPanel = await (await fetch(url, { headers: auth })).text();
+        assert.match(controlPanel, /id="tab-main" class="tab-content active"/);
+        assert.match(controlPanel, /id="tab-ringkasan" class="tab-content"/);
+        assert.match(controlPanel, /class="settings-menu-item active" data-menu-label="🏠 Menu Utama"/);
+
+        const profilePage = await (await fetch(`${url}/?profileId=${profileId}`, { headers: auth })).text();
+        assert.match(profilePage, /id="tab-main" class="tab-content active"/);
+        assert.match(profilePage, /class="settings-menu-item active" data-menu-label="👤 Profil Akun"/);
+        // Kartu PIN ikut terlihat karena halaman profil kini default-nya tab-main.
+        assert.match(profilePage, /id="profilePinSection" class="card profile-home-only" style="margin-top:16px"/);
+    });
+});
+
+test('new-account token field is excluded from the unsaved-changes banner', async () => {
+    await withDashboard(async (url) => {
+        const html = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(html, /if \(fieldName === 'newToken'\) return;/);
+        // Tombol Buat memuat ulang halaman agar akun baru muncul di daftar.
+        assert.match(html, /submitter\.value === 'newProfile'/);
+        assert.match(html, /window\.location\.reload\(\)/);
+        // Hapus akun: prompt password pemilik + reload setelah sukses.
+        assert.match(html, /function confirmDeleteAccount\(/);
+        assert.match(html, /name = 'ownerPassword'/);
+        assert.match(html, /startsWith\('delete:'\)/);
+    });
+});
+
+test('deleting an account is blocked while the owner password is unset', async () => {
+    const profileId = '100000000000000009';
+    await withSeededDashboard({
+        mainConfig: { token: '', settings: {}, multiAccount: { enabled: true, maxAccounts: 1 } },
+        profiles: {
+            [profileId]: { token: makeToken(profileId), botStatus: { running: false, paused: true }, settings: {} }
+        }
+    }, async (url, baseDir) => {
+        const headers = {
+            Authorization: authHeader(),
+            'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'X-Requested-With': 'XMLHttpRequest',
+            Accept: 'application/json'
+        };
+        const profilePath = path.join(baseDir, 'profiles', `config_${profileId}.json`);
+
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers,
+            body: new URLSearchParams({ profileAction: `delete:${profileId}`, ownerPassword: 'apa-saja' })
+        });
+
+        assert.equal(response.status, 403);
+        assert.match((await response.json()).message, /password pemilik belum diatur/i);
+        assert.equal(fs.existsSync(profilePath), true, 'profil tetap ada saat password pemilik belum diatur');
+    });
+});
+
+test('deleting an account requires the correct owner password', async () => {
+    const profileId = '100000000000000010';
+    const previousPassword = process.env.SLOT_OWNER_PASSWORD;
+    process.env.SLOT_OWNER_PASSWORD = 'test-owner-password-123';
+    try {
+        await withSeededDashboard({
+            mainConfig: { token: '', settings: {}, multiAccount: { enabled: true, maxAccounts: 1 } },
+            profiles: {
+                [profileId]: { token: makeToken(profileId), botStatus: { running: false, paused: true }, settings: {} }
+            }
+        }, async (url, baseDir) => {
+            const headers = {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            };
+            const profilePath = path.join(baseDir, 'profiles', `config_${profileId}.json`);
+            const deleteBody = extra => new URLSearchParams({ profileAction: `delete:${profileId}`, ...extra });
+
+            const missing = await fetch(`${url}/save`, { method: 'POST', headers, body: deleteBody() });
+            assert.equal(missing.status, 403);
+            assert.match((await missing.json()).message, /Password pemilik salah/i);
+            assert.equal(fs.existsSync(profilePath), true);
+
+            const wrong = await fetch(`${url}/save`, { method: 'POST', headers, body: deleteBody({ ownerPassword: 'password-salah' }) });
+            assert.equal(wrong.status, 403);
+            assert.equal(fs.existsSync(profilePath), true);
+
+            const ok = await fetch(`${url}/save`, { method: 'POST', headers, body: deleteBody({ ownerPassword: 'test-owner-password-123' }) });
+            assert.equal(ok.status, 200);
+            assert.equal((await ok.json()).success, true);
+            assert.equal(fs.existsSync(profilePath), false, 'profil terhapus setelah password pemilik benar');
+        });
+    } finally {
+        if (previousPassword === undefined) delete process.env.SLOT_OWNER_PASSWORD;
+        else process.env.SLOT_OWNER_PASSWORD = previousPassword;
+    }
+});

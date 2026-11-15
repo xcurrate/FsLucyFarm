@@ -1,0 +1,88 @@
+{
+  "port": 2028,
+  "botStatus": {
+    "running": false,
+    "paused": true
+  },
+  "maxLogLines": 15,
+  "settings": {
+    "lucyControl": {
+      "start": "lucy start",
+      "pause": "lucy pause",
+      "allowIds": []
+    },
+    "adventure": {
+      "enabled": false,
+      "channelId": ""
+    },
+    "messageFilter": {
+      "enabled": true,
+      "channelIds": [],
+      "guildIds": [],
+      "debug": false
+    },
+    "messageDebug": {
+      "enabled": false,
+      "targetId": "",
+      "channelId": "",
+      "guildId": ""
+    },
+    "telegram": {
+      "token": "",
+      "chatId": ""
+    },
+    "autoResume": false,
+    "voice": {
+      "enabled": false,
+      "channelId": ""
+    },
+    "boss2": {},
+    "gems": {},
+    "huntbot2": {},
+    "monsterCatcher": {},
+    "rest": {
+      "schedule": {
+        "enabled": false,
+        "start": "05:00",
+        "end": "10:00"
+      },
+      "budget": {
+        "enabled": false,
+        "maxMinutes": 300,
+        "minSessionMinutes": 15,
+        "maxSessionMinutes": 60
+      }
+    }
+  },
+  "safety": {
+    "cctv": false
+  },
+  "token": "",
+  "multiAccount": {
+    "enabled": true,
+    "maxAccounts": 3
+  },
+  "otherCommands": [
+    {
+      "text": "",
+      "delayMs": 5000,
+      "count": 1,
+      "channelId": "",
+      "enabled": false
+    },
+    {
+      "text": "",
+      "delayMs": 5000,
+      "count": 1,
+      "channelId": "",
+      "enabled": false
+    },
+    {
+      "text": "",
+      "delayMs": 5000,
+      "count": 1,
+      "channelId": "",
+      "enabled": false
+    }
+  ]
+}
