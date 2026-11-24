@@ -318,6 +318,49 @@ test('dashboard renders Message Debug controls and raw JSON output', async () =>
     });
 });
 
+test('POST /save persists Auto Boss2 reward gate settings and the dashboard renders them', async () => {
+    await withDashboard(async (url, baseDir) => {
+        const response = await fetch(`${url}/save`, {
+            method: 'POST',
+            headers: {
+                Authorization: authHeader(),
+                'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                Accept: 'application/json'
+            },
+            body: new URLSearchParams({
+                action: 'save',
+                boss2Enabled: 'on',
+                boss2RewardEnabled: 'on',
+                boss2RewardWeaponShards: '200',
+                boss2RewardWeaponCrate: '3',
+                boss2RewardBossCrate: '2',
+                boss2RewardFabledLootbox: '1',
+                boss2RewardExperience: '10000'
+            })
+        });
+
+        assert.equal(response.status, 200);
+        const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
+        assert.deepEqual(savedConfig.settings.boss2.rewardGate, {
+            enabled: true,
+            targetMode: 'any',
+            targets: {
+                weaponShards: 200,
+                weaponCrate: 3,
+                bossCrate: 2,
+                fabledLootbox: 1,
+                experience: 10000
+            }
+        });
+
+        const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
+        assert.match(page, /name="boss2RewardEnabled" checked/);
+        assert.match(page, /name="boss2RewardWeaponShards" value="200"/);
+        assert.match(page, /name="boss2RewardExperience" value="10000"/);
+    });
+});
+
 test('POST /save persists Auto Boss2 settings and the dashboard renders them', async () => {
     await withDashboard(async (url, baseDir) => {
         const response = await fetch(`${url}/save`, {
@@ -331,9 +374,7 @@ test('POST /save persists Auto Boss2 settings and the dashboard renders them', a
             body: new URLSearchParams({
                 action: 'save',
                 boss2Enabled: 'on',
-                boss2Guilds: 'g1, g2',
                 boss2ChannelIds: 'c1',
-                boss2BotIds: 'bot1',
                 boss2AppearText: 'Guild Boss Telah Muncul',
                 boss2DefeatedText: 'Boss Telah Dikalahkan',
                 boss2ButtonId: 'raid:fight',
@@ -345,18 +386,16 @@ test('POST /save persists Auto Boss2 settings and the dashboard renders them', a
 
         assert.equal(response.status, 200);
         const savedConfig = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
-        assert.deepEqual(savedConfig.settings.boss2, {
-            enabled: true,
-            allowedGuilds: ['g1', 'g2'],
-            channelIds: ['c1'],
-            botIds: ['bot1'],
-            appearText: 'Guild Boss Telah Muncul',
-            defeatedText: 'Boss Telah Dikalahkan',
-            buttonId: 'raid:fight',
-            fightsPerBoss: 2,
-            delayMinMs: 1000,
-            delayMaxMs: 3000
-        });
+        const boss2 = savedConfig.settings.boss2;
+        assert.equal(boss2.enabled, true);
+        assert.deepEqual(boss2.channelIds, ['c1']);
+        assert.equal(boss2.allowedGuilds, undefined);
+        assert.equal(boss2.appearText, 'Guild Boss Telah Muncul');
+        assert.equal(boss2.defeatedText, 'Boss Telah Dikalahkan');
+        assert.equal(boss2.buttonId, 'raid:fight');
+        assert.equal(boss2.fightsPerBoss, 2);
+        assert.equal(boss2.delayMinMs, 1000);
+        assert.equal(boss2.delayMaxMs, 3000);
 
         const page = await (await fetch(url, { headers: { Authorization: authHeader() } })).text();
         assert.match(page, /AUTO BOSS2/);
@@ -504,7 +543,7 @@ test('MULTI ACCOUNT chip actions keep the target profile configuration intact', 
     const profileConfig = {
         token: makeToken(profileId),
         botStatus: { running: true, paused: false },
-        settings: { messageFilter: { enabled: true, channelIds: ['999'], guildIds: ['888'], debug: false } },
+        settings: { messageDebug: { enabled: true, targetId: 'u1', channelId: 'c1', guildId: 'g1' } },
         otherCommands: [{ text: '!profile', delayMs: 7000, count: 3, channelId: '555', enabled: true }]
     };
 
@@ -533,10 +572,7 @@ test('MULTI ACCOUNT chip actions keep the target profile configuration intact', 
                     other1Text: '!main',
                     other1Channel: '111',
                     other1Delay: '5',
-                    other1Count: '1',
-                    mfEnabled: 'on',
-                    mfChannelIds: '',
-                    mfGuildIds: ''
+                    other1Count: '1'
                 })
             });
 
@@ -544,7 +580,7 @@ test('MULTI ACCOUNT chip actions keep the target profile configuration intact', 
             assert.deepEqual(await response.json(), { success: true, message: 'Account action completed' });
 
             const savedProfile = JSON.parse(fs.readFileSync(path.join(baseDir, 'profiles', `config_${profileId}.json`), 'utf8'));
-            assert.deepEqual(savedProfile.settings.messageFilter, { enabled: true, channelIds: ['999'], guildIds: ['888'], debug: false }, `chip ${action} must not reset profile settings`);
+            assert.deepEqual(savedProfile.settings.messageDebug, { enabled: true, targetId: 'u1', channelId: 'c1', guildId: 'g1' }, `chip ${action} must not reset profile settings`);
             assert.equal(savedProfile.otherCommands[0].text, '!profile');
             assert.equal(savedProfile.otherCommands[0].channelId, '555');
             assert.equal(savedProfile.token, makeToken(profileId), `chip ${action} must preserve the profile token`);
@@ -561,7 +597,7 @@ test('MULTI ACCOUNT chip start for the main account keeps the main configuration
         token: makeToken(mainId),
         botStatus: { running: false, paused: true },
         multiAccount: { enabled: true, maxAccounts: 2 },
-        settings: { messageFilter: { enabled: true, channelIds: ['777'], guildIds: ['666'], debug: false } },
+        settings: { messageDebug: { enabled: true, targetId: 'u2', channelId: 'c2', guildId: 'g2' } },
         otherCommands: [{ text: '!main', delayMs: 5000, count: 1, channelId: '111', enabled: false }]
     };
 
@@ -579,16 +615,13 @@ test('MULTI ACCOUNT chip start for the main account keeps the main configuration
                 other1Text: '',
                 other1Channel: '',
                 other1Delay: '',
-                other1Count: '',
-                mfEnabled: 'on',
-                mfChannelIds: '',
-                mfGuildIds: ''
+                other1Count: ''
             })
         });
 
         assert.equal(response.status, 200);
         const savedMain = JSON.parse(fs.readFileSync(path.join(baseDir, 'config.json'), 'utf8'));
-        assert.deepEqual(savedMain.settings.messageFilter, { enabled: true, channelIds: ['777'], guildIds: ['666'], debug: false }, 'main config settings must not be reset by its own chip');
+        assert.deepEqual(savedMain.settings.messageDebug, { enabled: true, targetId: 'u2', channelId: 'c2', guildId: 'g2' }, 'main config settings must not be reset by its own chip');
         assert.equal(savedMain.otherCommands[0].text, '!main');
         assert.deepEqual(savedMain.botStatus, { running: true, paused: false });
     });

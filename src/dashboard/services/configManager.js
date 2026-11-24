@@ -24,8 +24,11 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
         delete config.huntbot;
         delete config.captcha;
         delete config.autosolver;
-        delete config.macrodroidId;
         delete config.channels;
+        // Legacy dari tab "Notifikasi" / "Safety & Filter" yang sudah dihapus.
+        delete settings.telegram;
+        delete settings.messageFilter;
+        delete config.safety;
         delete settings.twoCaptchaKey;
         delete settings.control;
         delete settings.boss;
@@ -37,7 +40,6 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
         delete settings.custom;
         delete settings.text1;
         delete settings.text2;
-        if (settings.messageFilter) delete settings.messageFilter.debugOnlyOwO;
         delete config.delays;
         if (Array.isArray(config.otherCommands)) {
             config.otherCommands = config.otherCommands.map(command => {
@@ -51,13 +53,14 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
     },
 
     ensureShape(config) {
-        config.port = config.port || CONSTANTS.DEFAULT_PORT;
         config.botStatus = config.botStatus || { running: false, paused: false };
-        config.maxLogLines = config.maxLogLines || CONSTANTS.MAX_LOG_LINES;
-        config.logFileMaxLines = config.logFileMaxLines || CONSTANTS.LOG_FILE_MAX_LINES || 1000;
+        // Legacy dari tab "Kontrol & Sistem" yang sudah dihapus.
+        delete config.port;
+        delete config.maxLogLines;
+        delete config.logFileMaxLines;
+        delete config.settings?.autoResume;
 
         config.settings = config.settings || {};
-        config.safety = config.safety || { cctv: false };
         config.multiAccount = config.multiAccount || { enabled: true, maxAccounts: 0 };
         config.multiAccount.enabled = config.multiAccount.enabled !== false;
         config.multiAccount.maxAccounts = Math.max(0, Math.min(4, parseInt(config.multiAccount.maxAccounts, 10) || 0));
@@ -73,11 +76,8 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
         config.settings.adventure = config.settings.adventure || { enabled: false, channelId: '' };
         delete config.settings.adventure.guildId;
         delete config.settings.adventure.targetId;
-        config.settings.messageFilter = config.settings.messageFilter || { enabled: true, channelIds: [], guildIds: [], debug: false };
-        delete config.settings.messageFilter.debugOnlyOwO;
         config.settings.messageDebug = config.settings.messageDebug || { enabled: false, targetId: '', channelId: '', guildId: '' };
         config.settings.debug2 = config.settings.debug2 === true;
-        config.settings.telegram = config.settings.telegram || { token: "", chatId: "" };
         config.settings.voice = config.settings.voice || { enabled: false, channelId: "" };
         config.otherCommands = normalizeOtherCommands(config.otherCommands);
         config.fixedCommands = normalizeFixedCommands(config.fixedCommands);
@@ -91,7 +91,6 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
     },
 
     applySave(config, body) {
-        config.port = this.toInt(body.port, config.port);
         config.multiAccount = config.multiAccount || {};
         config.multiAccount.enabled = true;
         config.multiAccount.maxAccounts = Math.max(0, Math.min(4, this.toInt(body.maxAccounts, config.multiAccount.maxAccounts || 0)));
@@ -140,13 +139,6 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
             enabled: previousFixed.enabled === true
         };
 
-        config.settings.telegram.token = body.tgToken || '';
-        config.settings.telegram.chatId = body.tgChat || '';
-
-        config.maxLogLines = this.toInt(body.maxLogLines, 15);
-        config.logFileMaxLines = Math.max(0, this.toInt(body.logFileMaxLines, config.logFileMaxLines || CONSTANTS.LOG_FILE_MAX_LINES || 1000));
-        config.settings.autoResume = this.toBool(body.autoResume);
-
         config.settings.lucyControl = {
             start: String(body.lucyCtrlStart || '').trim() || 'lucy start',
             pause: String(body.lucyCtrlPause || '').trim() || 'lucy pause',
@@ -155,7 +147,6 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
 
         config.settings.boss2 = normalizeBoss2Settings({
             enabled: this.toBool(body.boss2Enabled),
-            allowedGuilds: this.toArray(body.boss2Guilds),
             channelIds: this.toArray(body.boss2ChannelIds),
             appearText: body.boss2AppearText,
             defeatedText: body.boss2DefeatedText,
@@ -164,7 +155,18 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
             delayMinMs: body.boss2DelayMin,
             delayMaxMs: body.boss2DelayMax,
             ticketStatusChannelId: body.boss2TicketStatusChannelId,
-            ticketStatusCommand: 'lboss t'
+            ticketStatusCommand: 'lboss t',
+            rewardGate: {
+                enabled: this.toBool(body.boss2RewardEnabled),
+                targetMode: config.settings.boss2?.rewardGate?.targetMode || 'any',
+                targets: {
+                    weaponShards: body.boss2RewardWeaponShards,
+                    weaponCrate: body.boss2RewardWeaponCrate,
+                    bossCrate: body.boss2RewardBossCrate,
+                    fabledLootbox: body.boss2RewardFabledLootbox,
+                    experience: body.boss2RewardExperience
+                }
+            }
         });
 
         config.settings.gems = normalizeGemsSettings({
@@ -205,11 +207,6 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
         });
 
         config.settings.adventure.channelId = String(body.adventureChannelId || '').trim();
-
-        config.settings.messageFilter.enabled = this.toBool(body.mfEnabled);
-        config.settings.messageFilter.channelIds = this.toArray(body.mfChannelIds);
-        config.settings.messageFilter.guildIds = this.toArray(body.mfGuildIds);
-        config.settings.messageFilter.debug = this.toBool(body.mfDebug);
 
         config.settings.messageDebug.enabled = this.toBool(body.messageDebugEnabled);
         config.settings.messageDebug.targetId = String(body.messageDebugTargetId || '').trim();
@@ -255,8 +252,6 @@ module.exports = function createConfigManager({ configPath, fileService, CONSTAN
             ping: cookiePingMode ? cookiePingMode === 'ping' : config.settings.cookie?.ping === true,
             command: String(body.cookieCommand || '').trim() || 'lucy rep'
         });
-
-        config.safety.cctv = this.toBool(body.cctvEnabled);
 
         return config;
     },

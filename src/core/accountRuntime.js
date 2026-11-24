@@ -1,8 +1,6 @@
 const path = require('path');
 const fs = require('fs');
 
-const createTelegramService = require('../services/telegram');
-const createMacrodroidService = require('../services/macrodroidService');
 const createBoss2Manager = require('../managers/boss2');
 const { normalizeBoss2Settings } = createBoss2Manager;
 const createAdventureManager = require('../managers/adventure');
@@ -55,11 +53,14 @@ const dropOwOConfig = (config = {}) => {
     delete config.huntbot;
     delete config.captcha;
     delete config.autosolver;
-    delete config.macrodroidId;
     delete config.channels;
     delete config.settings?.twoCaptchaKey;
-    if (config.settings?.messageFilter) delete config.settings.messageFilter.debugOnlyOwO;
     delete config.delays;
+    // Legacy dari tab Notifikasi / Safety & Filter / Kontrol & Sistem yang dihapus.
+    delete config.settings?.telegram;
+    delete config.settings?.messageFilter;
+    delete config.settings?.autoResume;
+    delete config.safety;
     if (Array.isArray(config.otherCommands)) {
         config.otherCommands = config.otherCommands.map(command => {
             if (!command) return command;
@@ -85,17 +86,13 @@ const ensureRuntimeShape = (config = {}) => {
     config.settings.adventure = config.settings.adventure || { enabled: false, channelId: '' };
     delete config.settings.adventure.guildId;
     delete config.settings.adventure.targetId;
-    config.settings.messageFilter = config.settings.messageFilter || { enabled: true, channelIds: [], guildIds: [], debug: false };
-    delete config.settings.messageFilter.debugOnlyOwO;
     config.settings.messageDebug = config.settings.messageDebug || { enabled: false, targetId: '', channelId: '', guildId: '' };
     config.settings.debug2 = config.settings.debug2 === true;
-    config.settings.telegram = config.settings.telegram || { token: '', chatId: '' };
     config.otherCommands = normalizeOtherCommands(config.otherCommands);
     config.fixedCommands = normalizeFixedCommands(config.fixedCommands);
     // Command Tetap dikunci mengikuti tier akun (premium 15-16 dtk, reguler 17-20 dtk).
     lockFixedDelay(config, config.accountTier);
     config.botStatus = config.botStatus || { running: false, paused: true };
-    config.safety = config.safety || { cctv: false };
     return dropOwOConfig(config);
 };
 
@@ -209,13 +206,11 @@ module.exports = function createAccountRuntime({ config, filePath, sharedStats }
     state.accountId = accountId;
     const configManager = createRuntimeConfigManager(state, filePath);
     state.persistConfig = () => configManager.save();
-    const telegramService = createTelegramService(state);
-    const macrodroidService = createMacrodroidService(state);
     const loopManagerWrapper = {
         stopAll: () => loopManager && loopManager.stopAll(),
         startAll: () => loopManager && loopManager.startAll()
     };
-    const emergencyHandler = createEmergencyHandler(state, configManager, loopManagerWrapper, telegramService);
+    const emergencyHandler = createEmergencyHandler(state, configManager, loopManagerWrapper);
     const commandSender = createCommandSender(state, emergencyHandler);
     const boss2Manager = createBoss2Manager(state, configManager);
     const adventureManager = createAdventureManager(state, configManager, commandSender);
@@ -231,8 +226,6 @@ module.exports = function createAccountRuntime({ config, filePath, sharedStats }
         configManager,
         emergencyHandler,
         loopManager,
-        telegramService,
-        macrodroidService,
         commandSender,
         voiceManager,
         adventureManager,
@@ -243,7 +236,7 @@ module.exports = function createAccountRuntime({ config, filePath, sharedStats }
         dailyManager,
         cookieManager
     );
-    const clientManager = createClientManager(state, configManager, messageHandler, telegramService, voiceManager, huntbot2Manager, dailyManager, cookieManager);
+    const clientManager = createClientManager(state, configManager, messageHandler, voiceManager, huntbot2Manager, dailyManager, cookieManager);
 
     const otherCommandReadyWatchers = new Map();
     let runtimeRunning = false;
@@ -297,7 +290,6 @@ module.exports = function createAccountRuntime({ config, filePath, sharedStats }
             state.adventureResumeAfterRest = state.adventureResumeAfterRest || !!state.adventureActive;
             adventureManager.stopTimer();
             state.adventureActive = false;
-            telegramService.send(`😴 <b>Istirahat dimulai</b>`);
         },
         onEnd() {
             loopManager.resumeOtherCommandDelays({ reason: 'rest' });
@@ -311,7 +303,6 @@ module.exports = function createAccountRuntime({ config, filePath, sharedStats }
                 loopsActive = false;
                 activateReadyRuntime('rest');
             }
-            telegramService.send('▶️ <b>Istirahat selesai</b>\nLoop dilanjutkan.');
         }
     });
 
