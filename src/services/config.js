@@ -1,0 +1,88 @@
+const { normalizeBoss2Settings } = require('../managers/boss2');
+const { normalizeGemsSettings } = require('../managers/gems');
+const { normalizeMonsterCatcherSettings } = require('../managers/monsterCatcher');
+const { normalizeRestSettings } = require('../managers/rest');
+const fs = require('fs');
+const path = require('path');
+const { safeJsonStringify } = require('../utils');
+const { resolveBaseDir } = require('../appPaths');
+
+const ensureRuntimeShape = (config = {}) => {
+    config.settings = config.settings || {};
+    config.settings.voice = config.settings.voice || { enabled: false, channelId: '' };
+    config.settings.adventure = config.settings.adventure || { enabled: false, channelId: '' };
+    delete config.settings.adventure.guildId;
+    delete config.settings.adventure.targetId;
+    config.settings.lucyControl = config.settings.lucyControl || { start: 'lucy start', pause: 'lucy pause', allowIds: [] };
+    config.settings.rest = normalizeRestSettings(config.settings.rest);
+    return config;
+};
+
+module.exports = (state) => {
+    const baseDir = resolveBaseDir();
+    const configFile = path.join(baseDir, 'config.json');
+    return {
+    read() {
+        try {
+            const raw = fs.readFileSync(configFile, 'utf8');
+            return ensureRuntimeShape(JSON.parse(raw));
+        } catch (e) {
+            return null;
+        }
+    },
+
+    save() {
+        ensureRuntimeShape(state.config);
+        fs.writeFileSync(configFile, JSON.stringify(state.config, null, 2));
+    },
+
+    getLucyControlCommands() {
+        const ctrl = state.config.settings?.lucyControl || {};
+        return {
+            startCmd: String(ctrl.start || 'lucy start').trim().toLowerCase(),
+            pauseCmd: String(ctrl.pause || 'lucy pause').trim().toLowerCase(),
+            allowIds: Array.isArray(ctrl.allowIds) ? ctrl.allowIds.map(String) : []
+        };
+    },
+
+    getBoss2Settings() {
+        return normalizeBoss2Settings(state.config.settings?.boss2);
+    },
+
+    getGemsSettings() {
+        return normalizeGemsSettings(state.config.settings?.gems);
+    },
+
+    getMonsterCatcherSettings() {
+        return normalizeMonsterCatcherSettings(state.config.settings?.monsterCatcher);
+    },
+
+    getAdventureSettings() {
+        const adventure = state.config.settings?.adventure || {};
+        return {
+            enabled: adventure.enabled === true,
+            channelId: String(adventure.channelId || '').trim()
+        };
+    },
+
+    updateFromDisk() {
+        const diskConfig = this.read();
+        if (!diskConfig) return false;
+
+        const previousToken = state.activeToken;
+        const tokenChanged = diskConfig.token !== state.activeToken;
+        const voiceChanged = safeJsonStringify(state.config.settings?.voice) !== safeJsonStringify(diskConfig.settings?.voice);
+
+        const wasPaused = state.config.botStatus?.paused;
+        const wasRunning = state.config.botStatus?.running;
+        const nowPaused = diskConfig.botStatus?.paused;
+        const nowRunning = diskConfig.botStatus?.running;
+
+        const statusChanged = wasPaused !== nowPaused || wasRunning !== nowRunning;
+
+        state.config = diskConfig;
+
+        return { tokenChanged, previousToken, voiceChanged, statusChanged, wasPaused, wasRunning, nowPaused, nowRunning };
+    }
+    };
+};

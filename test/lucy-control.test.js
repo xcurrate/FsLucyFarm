@@ -1,0 +1,98 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const createMessageHandler = require('../src/managers/message');
+
+function createHarness({ allowIds = [] } = {}) {
+    const calls = [];
+    const state = {
+        client: { isReady: () => true, user: { id: 'self' } },
+        config: {
+            botStatus: { running: false, paused: true },
+            settings: {
+                boss2: { enabled: false },
+                gems: { enabled: false },
+                adventure: { enabled: false, targetId: 't', channelId: 'c' }
+            },
+            otherCommands: [{ enabled: false }, { enabled: false }, { enabled: false }]
+        }
+    };
+    const configManager = {
+        getLucyControlCommands: () => ({ startCmd: 'lucy start', pauseCmd: 'lucy pause', allowIds }),
+        save: () => calls.push('save')
+    };
+    const loopManager = {
+        startAll: () => calls.push('schedulerStartAll'),
+        stopAll: () => calls.push('schedulerStopAll'),
+        startOtherCommand: (index) => calls.push(`startOther${index}`),
+        stopOtherCommand: (index) => calls.push(`stopOther${index}`)
+    };
+    const adventureManager = {
+        start: async (opts) => { calls.push(`advStart:${opts?.restart}`); return true; },
+        stop: () => calls.push('advStop')
+    };
+    const emergencyHandler = {
+        resume: () => {
+            calls.push('emergencyResume');
+            state.config.botStatus = { running: true, paused: false };
+            loopManager.startAll();
+        }
+    };
+    const handler = createMessageHandler(
+        state,
+        configManager,
+        emergencyHandler,
+        loopManager,
+        {},
+        null,
+        adventureManager,
+        { stop: () => calls.push('boss2Stop') },
+        { stop: () => calls.push('gemsStop') },
+        null,
+        null
+    );
+    const send = (content, authorId = 'self') => handler.handleControlCommands({ content, author: { id: authorId }, channel: { id: 'ch' } });
+    return { state, calls, send };
+}
+
+const lucyFlags = (state) => [
+    state.config.settings.boss2.enabled,
+    state.config.settings.gems.enabled,
+    state.config.settings.adventure.enabled,
+    ...state.config.otherCommands.map(command => command.enabled)
+];
+
+test('Lucy start word enables every Lucy feature and starts its schedulers', async () => {
+    const { state, calls, send } = createHarness();
+    await send('Lucy Start');
+
+    assert.deepEqual(lucyFlags(state), [true, true, true, true, true, true]);
+    assert.ok(calls.includes('save'));
+    assert.ok(calls.includes('advStart:true'));
+    assert.ok(calls.includes('emergencyResume'), 'Control Lucy start resumes an emergency-paused account');
+    assert.ok(calls.includes('schedulerStartAll'), 'resume calls scheduler startAll');
+    assert.deepEqual(state.config.botStatus, { running: true, paused: false });
+});
+
+test('Lucy pause word disables every Lucy feature and stops timers', async () => {
+    const { state, calls, send } = createHarness();
+    await send('lucy start');
+    calls.length = 0;
+    await send('lucy pause');
+
+    assert.deepEqual(lucyFlags(state), [false, false, false, false, false, false]);
+    for (const call of ['save', 'advStop', 'stopOther0', 'stopOther1', 'stopOther2', 'boss2Stop', 'gemsStop']) {
+        assert.ok(calls.includes(call), `expected ${call}`);
+    }
+    assert.ok(!calls.includes('schedulerStopAll'));
+});
+
+test('Lucy control ignores senders outside lucyControl.allowIds', async () => {
+    const { state, calls, send } = createHarness({ allowIds: ['friend'] });
+    await send('lucy start', 'stranger');
+    assert.deepEqual(lucyFlags(state), [false, false, false, false, false, false]);
+    assert.deepEqual(calls, []);
+
+    await send('lucy start', 'friend');
+    assert.deepEqual(lucyFlags(state), [true, true, true, true, true, true]);
+});
