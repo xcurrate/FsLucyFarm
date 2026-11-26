@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -98,6 +99,17 @@ const rewardImageDeps = (fixture = REWARD_FIXTURE) => ({
 
 function rewardComponents({ url = REWARD_URL, disabled = false } = {}) {
     const components = appearComponents({ disabled });
+    components[0].components.splice(
+        3,
+        0,
+        { type: 10, content: '## Hadiah' },
+        { type: 12, items: [{ media: { url } }] }
+    );
+    return components;
+}
+
+function globalRewardComponents({ url = REWARD_URL, disabled = false } = {}) {
+    const components = globalAppearComponents({ disabled });
     components[0].components.splice(
         3,
         0,
@@ -326,13 +338,123 @@ test('Boss2 does not re-fight when the same boss message is edited after a rejec
     manager.stop();
 });
 
+const sha256 = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+
+test('Reward image hash separates a repost from a new Global Boss with the same endsAt', async () => {
+    const imageA = fs.readFileSync(path.join(__dirname, 'fixtures', 'boss-reward-1.png'));
+    const imageB = fs.readFileSync(path.join(__dirname, 'fixtures', 'boss-reward-2.png'));
+    const urlA = 'https://cdn.discordapp.com/attachments/1/2/rewards-a.png';
+    const urlB = 'https://cdn.discordapp.com/attachments/1/2/rewards-b.png';
+    const { manager } = setup(
+        { globalEnabled: true, fightsPerBoss: 1, delayMinMs: 0, delayMaxMs: 0 },
+        { downloadImage: async (url) => (url === urlA ? imageA : imageB) }
+    );
+
+    const first = createMessage(globalAppearComponents(), {
+        id: 'global-first',
+        clickButton: async () => { throw new Error('stop-test'); }
+    });
+    assert.equal(await manager.handle(first.msg), 'fought');
+    const raid = manager.getRaidState('guild-1', 'global');
+    raid.status = 'waiting-defeat';
+    raid.fightsDone = 0;
+    raid.rewardImageHash = sha256(imageA);
+
+    const repostClicks = [];
+    const repost = createMessage(globalRewardComponents({ url: urlA }), {
+        id: 'global-repost',
+        clickButton: async (id) => repostClicks.push(id)
+    });
+    assert.equal(await manager.handle(repost.msg), 'waiting-defeat-skip');
+    assert.deepEqual(repostClicks, [], 'Repost dengan hash reward sama tidak boleh Fight ulang');
+    assert.equal(raid.rewardImageHash, sha256(imageA));
+
+    const newClicks = [];
+    const newBoss = createMessage(globalRewardComponents({ url: urlB }), {
+        id: 'global-new',
+        clickButton: async (id) => { newClicks.push(id); throw new Error('stop-test'); }
+    });
+    assert.equal(await manager.handle(newBoss.msg), 'fought');
+    assert.deepEqual(newClicks, ['raid:fight']);
+    assert.equal(raid.rewardImageHash, sha256(imageB));
+    assert.equal(raid.fightsDone, 0);
+    manager.stop();
+});
+
+test('Reward gate reuses OCR for the same reward image hash across messages', async () => {
+    let reads = 0;
+    const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', REWARD_FIXTURE));
+    const deps = {
+        downloadImage: async () => bytes,
+        readRewards: async () => {
+            reads += 1;
+            return { weaponShards: 500, weaponCrate: 0, bossCrate: 0, fabledLootbox: 0, experience: 0 };
+        }
+    };
+    const { manager } = setup(rewardGate({ weaponShards: 200 }), deps);
+    const first = createMessage(rewardComponents({
+        url: 'https://cdn.discordapp.com/attachments/1/2/rewards-a.png'
+    }), {
+        id: 'reward-a',
+        clickButton: async () => { throw new Error('stop-test'); }
+    });
+    assert.equal(await manager.handle(first.msg), 'fought');
+
+    const second = createMessage(rewardComponents({
+        url: 'https://cdn.discordapp.com/attachments/1/2/rewards-b.png'
+    }), {
+        id: 'reward-b',
+        clickButton: async () => { throw new Error('stop-test'); }
+    });
+    assert.equal(await manager.handle(second.msg), 'fought');
+    assert.equal(reads, 1, 'OCR hanya boleh sekali untuk hash gambar yang sama');
+    manager.stop();
+});
+
+test('Reward image hash takes priority over the "already fought" prompt for a new boss', async () => {
+    const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'boss-reward-2.png'));
+    const { fightClicks, ticketClicks } = await runTicketScenario({
+        guildLeft: 3, globalLeft: 2, fightsPerBoss: 1, repeatPrompt: true,
+        kind: 'global',
+        rewardUrl: 'https://cdn.discordapp.com/attachments/1/2/rewards-priority.png',
+        downloadImage: async () => bytes,
+        rewardGate: { enabled: true, targets: { weaponShards: 0 } }
+    });
+    assert.deepEqual(fightClicks, ['raid:fight']);
+    assert.ok(ticketClicks.includes('raid:ticket:yes'), 'Hash boss baru harus mengalahkan prompt "sudah melawan"');
+    assert.ok(!ticketClicks.includes('raid:ticket:no'));
+});
+
+test('Reward image hash takes priority over the "already fought" prompt on a same-hash repost', async () => {
+    const bytes = fs.readFileSync(path.join(__dirname, 'fixtures', 'boss-reward-2.png'));
+    const hash = sha256(bytes);
+    const { fightClicks, ticketClicks } = await runTicketScenario({
+        guildLeft: 3, globalLeft: 2, fightsPerBoss: 1, repeatPrompt: true,
+        kind: 'global',
+        rewardUrl: 'https://cdn.discordapp.com/attachments/1/2/rewards-repost.png',
+        downloadImage: async () => bytes,
+        rewardGate: { enabled: true, targets: { weaponShards: 0 } },
+        preloadRaid: {
+            status: 'active',
+            messageId: 'previous-global-msg',
+            bossEndsAt: ENDS_AT * 1000,
+            fightsDone: 0,
+            rewardImageHash: hash
+        }
+    });
+    assert.deepEqual(fightClicks, ['raid:fight']);
+    assert.ok(ticketClicks.includes('raid:ticket:yes'), 'Repost hash sama tapi belum pernah fight tetap boleh Fight');
+    assert.ok(!ticketClicks.includes('raid:ticket:no'));
+});
+
 // Menjalankan satu siklus Fight sampai tiket diputuskan. Saldo `guildLeft`/
 // `globalLeft` hanya dipakai sebagai fallback channel privat; prompt ephemeral
 // selalu diprioritaskan.
 async function runTicketScenario({
     guildLeft, globalLeft, fightsPerBoss = 1, repeatPrompt = false, ticketText,
     fightsDoneBeforePrompt = 0, kind = 'guild', globalEnabled = kind === 'global',
-    globalChannelIds = [], stop = true
+    globalChannelIds = [], rewardGate = null, rewardUrl = null, downloadImage = null,
+    preloadRaid = null, stop = true
 } = {}) {
     const state = {
         config: {
@@ -340,13 +462,20 @@ async function runTicketScenario({
                 boss2: {
                     enabled: true, delayMinMs: 0, delayMaxMs: 0,
                     fightsPerBoss, minTicketLeft: 1, ticketStatusChannelId: 'private-1',
-                    globalEnabled, globalChannelIds
+                    globalEnabled, globalChannelIds, rewardGate
                 }
             }
         },
         client: { user: { id: 'self-account' } }
     };
-    const manager = createBoss2Manager(state, { getBoss2Settings: () => normalizeBoss2Settings(state.config.settings.boss2) });
+    const manager = createBoss2Manager(state, {
+        getBoss2Settings: () => normalizeBoss2Settings(state.config.settings.boss2)
+    }, downloadImage ? { downloadImage } : {});
+    if (preloadRaid) {
+        const key = preloadRaid.key || 'guild-1';
+        const raidKind = preloadRaid.kind || kind;
+        state.boss2Raids.set(`${key}:${raidKind}`, { key, kind: raidKind, ...preloadRaid });
+    }
 
     const privateSends = [];
     state.client.channels = {
@@ -383,7 +512,9 @@ async function runTicketScenario({
         guildId: 'guild-1',
         channel: { id: 'channel-1' },
         author: { id: LUCY_ID },
-        components: kind === 'global' ? globalAppearComponents() : appearComponents(),
+        components: rewardUrl
+            ? (kind === 'global' ? globalRewardComponents({ url: rewardUrl }) : rewardComponents({ url: rewardUrl }))
+            : (kind === 'global' ? globalAppearComponents() : appearComponents()),
         clickButton: async (id) => {
             fightClicks.push(id);
             if (id !== 'raid:fight') return;
