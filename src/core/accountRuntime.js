@@ -86,7 +86,8 @@ const ensureRuntimeShape = (config = {}) => {
     config.settings.adventure = config.settings.adventure || { enabled: false, channelId: '' };
     delete config.settings.adventure.guildId;
     delete config.settings.adventure.targetId;
-    config.settings.messageDebug = config.settings.messageDebug || { enabled: false, targetId: '', channelId: '', guildId: '' };
+    config.settings.messageDebug = config.settings.messageDebug || { enabled: false, targetId: '', channelId: '' };
+    delete config.settings.messageDebug.guildId;
     config.settings.debug2 = config.settings.debug2 === true;
     config.otherCommands = normalizeOtherCommands(config.otherCommands);
     config.fixedCommands = normalizeFixedCommands(config.fixedCommands);
@@ -212,7 +213,10 @@ module.exports = function createAccountRuntime({ config, filePath, sharedStats }
     };
     const emergencyHandler = createEmergencyHandler(state, configManager, loopManagerWrapper);
     const commandSender = createCommandSender(state, emergencyHandler);
-    const boss2Manager = createBoss2Manager(state, configManager);
+    const boss2StateFile = filePath
+        ? path.join(path.dirname(filePath), 'boss2-state', `${accountId}.json`)
+        : null;
+    const boss2Manager = createBoss2Manager(state, configManager, { stateFile: boss2StateFile });
     const adventureManager = createAdventureManager(state, configManager, commandSender);
     const gemsManager = createGemsManager(state, configManager, commandSender);
     const loopManager = createLoopManager(state, commandSender);
